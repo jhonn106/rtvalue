@@ -1,10 +1,9 @@
-# .github/workflows/stockbit-snapshot.yml
 name: Stockbit Snapshot
 
 on:
-  workflow_dispatch:   # bisa di-run manual dari tab Actions
+  workflow_dispatch:
   schedule:
-    - cron: "0 2 * * 1-5"   # 02:00 UTC = 09:00 WIB, Senin–Jumat
+    - cron: "0 2 * * 1-5"   # 02:00 UTC = 09:00 WIB
 
 jobs:
   snapshot:
@@ -14,26 +13,21 @@ jobs:
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      STOCKBIT_TOKEN_PATH: token.json   # tempat simpan token Bearer
+      STOCKBIT_TOKEN_PATH: token.json
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install deps + Playwright
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Install Playwright Chromium
-        run: |
           python -m playwright install --with-deps chromium
 
       - name: Run snapshot once
         run: |
-          python runners/snap_once.py
+          python snap_once.py
