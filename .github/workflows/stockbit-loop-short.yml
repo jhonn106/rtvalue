@@ -1,15 +1,43 @@
-- name: Debug list files & pythonpath
-  run: |
-    pwd
-    ls -R
-    python -c "import sys, pkgutil; print('sys.path[0]=', sys.path[0]); import runners, importlib; print('runners OK')"
+name: Stockbit Loop (Short)
 
-- name: Run loop ~20 menit
-  env:
-    STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
-    STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
-    TG_TOKEN: ${{ secrets.TG_TOKEN }}
-    TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-    STOCKBIT_TOKEN_PATH: token.json
-  run: |
-    python -m runners.live_loop
+on:
+  workflow_dispatch:  # jalankan manual dari tab Actions
+
+jobs:
+  loop:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
+      STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+      STOCKBIT_TOKEN_PATH: token.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install deps + Playwright
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      # bikin folder jadi package agar bisa import runners.*
+      - name: Make packages importable
+        run: |
+          python - <<'PY'
+          import pathlib
+          for p in ["auth","clients","logic","notif","runners"]:
+              pathlib.Path(p, "__init__.py").touch()
+          print("created __init__.py files")
+          PY
+
+      - name: Run loop ~20 menit
+        run: python -m runners.live_loop
