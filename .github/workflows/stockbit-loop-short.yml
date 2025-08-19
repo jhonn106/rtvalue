@@ -1,3 +1,9 @@
+- name: Debug list files & pythonpath
+  run: |
+    pwd
+    ls -R
+    python -c "import sys, pkgutil; print('sys.path[0]=', sys.path[0]); import runners, importlib; print('runners OK')"
+
 - name: Run loop ~20 menit
   env:
     STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
