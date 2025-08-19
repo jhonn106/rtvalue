@@ -1,0 +1,17 @@
+report:
+  top_n: 10
+  include_powerbuy: true
+
+powerbuy:
+  interval: "10m"
+  per_report_limit: 10
+
+running_trade:
+  limit: 50
+
+aggressive_window:
+  start_hhmm: "09:00"
+  end_hhmm: "10:00"
+
+telegram:
+  enable: true
