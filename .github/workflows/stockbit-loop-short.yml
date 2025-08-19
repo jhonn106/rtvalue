@@ -1,34 +1,36 @@
 name: Stockbit Loop (Short)
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # manual trigger
+  schedule:
+    - cron: "0 2 * * 1-5"   # contoh: setiap hari kerja jam 09:00 WIB (02:00 UTC)
 
 jobs:
   loop:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    env:
-      STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
-      STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
-      TG_TOKEN: ${{ secrets.TG_TOKEN }}
-      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      STOCKBIT_TOKEN_PATH: token.json
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v3
 
-      - uses: actions/setup-python@v5
+      - name: Setup Python
+        uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      - name: Install deps + Playwright
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-          python -m playwright install --with-deps chromium
+          playwright install chromium
+          playwright install-deps
 
-         
-  - name: Run loop ~20 menit
+      - name: Run loop ~20 menit
+        env:
+          STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
+          STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
+          TG_TOKEN: ${{ secrets.TG_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          STOCKBIT_TOKEN_PATH: token.json
         run: |
-          python -m live_loop.py
-
+          python live_loop.py
