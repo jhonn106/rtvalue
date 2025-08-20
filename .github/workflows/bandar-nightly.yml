@@ -1,4 +1,6 @@
 name: Bandar Nightly
+permissions:
+  contents: write
 
 on:
   workflow_dispatch:
