@@ -71,3 +71,13 @@ def powerbuy(symbol, interval="10m"):
     url = f"{BASE}/order-trade/trade-book"
     q = [("symbol", symbol), ("group_by","GROUP_BY_TIME"), ("time_interval", interval)]
     return _get(url, params=q)
+
+def akumulasi_custom():
+    """
+    Ambil data akumulasi dari screener kustom.
+    Hasil: JSON (server-side), nanti di-parse di runner.
+    """
+    url = "https://exodus.stockbit.com/screener/templates/4272542"
+    q = [("type", "TEMPLATE_TYPE_CUSTOM")]
+    return _get(url, params=q)
+
