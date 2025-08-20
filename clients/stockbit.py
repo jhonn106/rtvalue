@@ -85,37 +85,35 @@ def akumulasi_results_any(template_id=4272542, per_page=2000):
     base = "https://exodus.stockbit.com"
     tried = []
 
-    # 1) GET results via query
-    url1 = f"{base}/screener/results"
+    # 1) GET /screener/results
     try:
-        params = [("template_id", str(template_id)), ("page", "1"), ("per_page", str(per_page))]
-        r = _request_with_refresh("GET", url1, params=params)
-        tried.append(("GET /screener/results", r.status_code, r.text[:180]))
+        r = _request_with_refresh("GET", f"{base}/screener/results",
+                                  params=[("template_id", str(template_id)),
+                                          ("page","1"), ("per_page", str(per_page))])
+        tried.append(("GET /screener/results", r.status_code, r.text[:160]))
         r.raise_for_status()
         return {"_source": "GET results?template_id", "data": r.json()}
     except Exception:
         pass
 
-    # 2) POST results
-    url2 = f"{base}/screener/results"
+    # 2) POST /screener/results
     try:
-        body = {"template_id": int(template_id), "page": 1, "per_page": per_page}
-        r = _request_with_refresh("POST", url2, json=body)
-        tried.append(("POST /screener/results", r.status_code, r.text[:180]))
+        r = _request_with_refresh("POST", f"{base}/screener/results",
+                                  json={"template_id": int(template_id), "page": 1, "per_page": per_page})
+        tried.append(("POST /screener/results", r.status_code, r.text[:160]))
         r.raise_for_status()
         return {"_source": "POST /screener/results", "data": r.json()}
     except Exception:
         pass
 
-    # 3) GET templates/{id}/results (kalau ada di backend)
-    url3 = f"{base}/screener/templates/{template_id}/results"
+    # 3) GET /screener/templates/{id}/results (jika backend support)
     try:
-        r = _request_with_refresh("GET", url3, params=[("per_page", str(per_page))])
-        tried.append((f"GET /screener/templates/{template_id}/results", r.status_code, r.text[:180]))
+        r = _request_with_refresh("GET", f"{base}/screener/templates/{template_id}/results",
+                                  params=[("per_page", str(per_page))])
+        tried.append((f"GET /screener/templates/{template_id}/results", r.status_code, r.text[:160]))
         r.raise_for_status()
         return {"_source": "GET templates/{id}/results", "data": r.json()}
     except Exception:
         pass
 
     raise RuntimeError(f"Screener results gagal di semua endpoint. Tried={tried}")
-
