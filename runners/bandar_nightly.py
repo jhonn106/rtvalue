@@ -13,8 +13,9 @@ DATA_DIR = Path("data/bandar")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 # kirim ke bot Telegram #3 (pisah dari bot snapshot/rt)
-TG_TOKEN = os.environ.get("TG_TOKEN")                  # token tetap sama
-TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3") or os.environ.get("BANDAR_TG_CHAT_ID")
+TG_TOKEN = os.environ.get("TG_TOKEN") or os.environ.get("TG_TOKEN_BANDAR")
+TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3")
+
 
 MAX_SYMBOLS = 20   # kirim maksimal 20 saham
 ROLLING_DAYS = 5   # kumpulkan 5 hari (Senin–Sabtu)
