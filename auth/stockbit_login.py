@@ -156,9 +156,24 @@ def login_and_capture_token(headless=True, timeout_ms=90000):
 
     save_token(final_token)
     return final_token
-
 def get_bearer_token():
+    # 1) Prioritas ENV: STOCKBIT_BEARER (secret)
+    env_tok = os.environ.get("STOCKBIT_BEARER")
+    if env_tok:
+        try:
+            save_token(env_tok.strip())
+            print("[AUTH] Using STOCKBIT_BEARER from env.")
+            return env_tok.strip()
+        except Exception:
+            pass
+
+    # 2) Pakai token file jika masih valid
     token = load_token_if_valid()
     if token:
+        print("[AUTH] Using cached token.json")
         return token
+
+    # 3) Terakhir: coba login Playwright (kadang diblok headless di CI)
+    print("[AUTH] Falling back to Playwright login…")
     return login_and_capture_token(headless=True)
+
