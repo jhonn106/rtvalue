@@ -14,7 +14,8 @@ jobs:
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      STOCKBIT_TOKEN_PATH: token.json   # file token disimpan di workspace
+      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}   # <- opsional: pakai token manual kalau Playwright gagal
+      STOCKBIT_TOKEN_PATH: token.json
 
     steps:
       - name: Checkout
@@ -34,7 +35,6 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      # pastikan folder jadi package agar bisa import runners.*
       - name: Make packages importable
         run: |
           python - <<'PY'
@@ -42,6 +42,15 @@ jobs:
           for p in ["auth","clients","logic","notif","runners"]:
               pathlib.Path(p, "__init__.py").touch()
           print("created __init__.py files")
+          PY
+
+      - name: Debug secrets presence
+        run: |
+          python - <<'PY'
+          import os
+          print("Email present?", bool(os.environ.get('STOCKBIT_EMAIL')))
+          print("Password present?", bool(os.environ.get('STOCKBIT_PASSWORD')))
+          print("Bearer present?", bool(os.environ.get('STOCKBIT_BEARER')))
           PY
 
       - name: Test Stockbit login (capture bearer)
@@ -52,17 +61,7 @@ jobs:
           print("✅ Token OK, length =", len(t))
           print("🔑 Prefix:", t[:15] + "...")
           PY
-          - name: Debug secrets presence
-  run: |
-    python - <<'PY'
-    import os
-    print("Email present?", bool(os.environ.get('STOCKBIT_EMAIL')))
-    print("Password present?", bool(os.environ.get('STOCKBIT_PASSWORD')))
-    print("Bearer present?", bool(os.environ.get('STOCKBIT_BEARER')))
-    PY
-
 
       - name: Run snapshot once
         run: |
-          python -c "import os; print('Email present?', bool(os.environ.get('STOCKBIT_EMAIL')))"
           python -m runners.snap_once
