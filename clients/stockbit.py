@@ -58,3 +58,19 @@ def powerbuy(symbol, interval="10m"):
     url = f"{BASE}/order-trade/trade-book"
     params = {"symbol":symbol,"group_by":"GROUP_BY_TIME","time_interval":interval}
     return _get(url, params=params)
+def top_gainer_simple():
+    # fallback tanpa filter_stocks
+    url = f"{BASE}/order-trade/market-mover"
+    q = [("mover_type","MOVER_TYPE_TOP_GAINER")]
+    return _get(url, params=q)
+
+def top_value_simple():
+    # fallback tanpa filter_stocks
+    url = f"{BASE}/order-trade/market-mover"
+    q = [("mover_type","MOVER_TYPE_TOP_VALUE")]
+    return _get(url, params=q)
+
+def running_trade_simple():
+    # fallback tanpa param (biar lihat default API)
+    url = f"{BASE}/order-trade/running-trade"
+    return _get(url, params=None)
