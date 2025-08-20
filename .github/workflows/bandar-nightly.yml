@@ -10,7 +10,7 @@ jobs:
   nightly-bandar:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-        env:
+    env:
       STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}
