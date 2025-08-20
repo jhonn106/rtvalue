@@ -3,25 +3,10 @@ name: Stockbit Snapshot
 on:
   workflow_dispatch:
   schedule:
-    # contoh: setiap 10 menit antara 02:00–03:00 UTC (≈ 09:00–10:00 WIB) di hari kerja
+    # setiap 10 menit pada 02:00 UTC (≈ 09:00 WIB) di hari kerja
     - cron: "*/10 2 * * 1-5"
 
 jobs:
-- name: Debug Telegram chat id
-  run: |
-    python - <<'PY'
-    import os, requests, json
-    tok=os.environ["TG_TOKEN"]
-    r=requests.get(f"https://api.telegram.org/bot{tok}/getUpdates", timeout=15)
-    print(r.text)
-    u=r.json()
-    if "result" in u and u["result"]:
-        chat=u["result"][-1]["message"]["chat"]
-        print("Detected chat:", chat)
-    else:
-        print("Kirim pesan /start ke bot dulu, lalu rerun workflow.")
-    PY
-
   run-snapshot:
     runs-on: ubuntu-latest
     env:
@@ -29,7 +14,7 @@ jobs:
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}   # <- opsional: pakai token manual kalau Playwright gagal
+      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}   # opsional; pakai token manual kalau Playwright gagal
       STOCKBIT_TOKEN_PATH: token.json
 
     steps:
@@ -59,6 +44,28 @@ jobs:
           print("created __init__.py files")
           PY
 
+      - name: Debug Telegram chat id
+        run: |
+          python - <<'PY'
+          import os, requests, json
+          tok = os.environ.get("TG_TOKEN")
+          if not tok:
+              print("TG_TOKEN kosong; lewati cek Telegram.")
+          else:
+              r = requests.get(f"https://api.telegram.org/bot{tok}/getUpdates", timeout=15)
+              print("getUpdates raw:", r.text[:500])
+              try:
+                  u = r.json()
+                  if "result" in u and u["result"]:
+                      chat = u["result"][-1]["message"]["chat"]
+                      print("Detected chat object:", chat)
+                      print("👉 Gunakan chat.id ini untuk TG_CHAT_ID.")
+                  else:
+                      print("Kirim /start ke bot atau kirim pesan di group/channel lalu rerun workflow.")
+              except Exception as e:
+                  print("Gagal parse getUpdates JSON:", e)
+          PY
+
       - name: Debug secrets presence
         run: |
           python - <<'PY'
@@ -66,6 +73,8 @@ jobs:
           print("Email present?", bool(os.environ.get('STOCKBIT_EMAIL')))
           print("Password present?", bool(os.environ.get('STOCKBIT_PASSWORD')))
           print("Bearer present?", bool(os.environ.get('STOCKBIT_BEARER')))
+          print("TG token present?", bool(os.environ.get('TG_TOKEN')))
+          print("TG chat id present?", bool(os.environ.get('TG_CHAT_ID')))
           PY
 
       - name: Test Stockbit login (capture bearer)
