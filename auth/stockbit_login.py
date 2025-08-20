@@ -1,179 +1,209 @@
-import os, json, time, base64, re
-from datetime import datetime, timezone, timedelta
+# auth/stockbit_login.py
+import os
+import re
+import json
+import base64
+import time
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
 from playwright.sync_api import sync_playwright
 
+STOCKBIT_EMAIL = os.environ.get("STOCKBIT_EMAIL")
+STOCKBIT_PASSWORD = os.environ.get("STOCKBIT_PASSWORD")
 TOKEN_PATH = os.environ.get("STOCKBIT_TOKEN_PATH", "token.json")
 
-JWT_RE = re.compile(r"^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$")
+STREAM_URL = "https://stockbit.com/#/stream"  # memicu panggilan ke exodus
+EXODUS_HOST = "exodus.stockbit.com"
 
-def _decode_jwt_exp(jwt_token: str):
+# -------- helpers --------
+
+def _b64url_decode(data: str) -> bytes:
+    padding = '=' * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+def _parse_jwt_exp(tok: str):
+    """Coba baca exp dari JWT; kalau bukan JWT, return None."""
     try:
-        payload_b64 = jwt_token.split(".")[1] + "==="
-        payload = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+        parts = tok.split(".")
+        if len(parts) != 3:
+            return None
+        payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
         exp = payload.get("exp")
-        if exp:
-            return datetime.fromtimestamp(int(exp), tz=timezone.utc)
+        if isinstance(exp, (int, float)):
+            return datetime.fromtimestamp(exp, tz=timezone.utc)
     except Exception:
-        pass
+        return None
     return None
 
-def load_token_if_valid(min_valid_sec=600):
-    if not os.path.exists(TOKEN_PATH):
-        return None
+def _save_token(token: str, exp_dt: datetime | None):
+    data = {
+        "token": token,
+        "exp": exp_dt.astimezone(timezone.utc).isoformat() if exp_dt else None,
+        "saved_at": datetime.now(timezone.utc).isoformat(),
+    }
+    Path(TOKEN_PATH).write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"[AUTH] Token saved, exp: {data['exp']}")
+
+def _load_token():
     try:
-        with open(TOKEN_PATH, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        token = data.get("access_token")
-        exp_iso = data.get("exp_iso")
-        if token and exp_iso:
-            exp_dt = datetime.fromisoformat(exp_iso)
-            if exp_dt - datetime.now(timezone.utc) > timedelta(seconds=min_valid_sec):
-                return token
+        data = json.loads(Path(TOKEN_PATH).read_text(encoding="utf-8"))
+        tok = data.get("token")
+        exp = data.get("exp")
+        exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00")) if exp else None
+        return tok, exp_dt
     except Exception:
-        pass
-    return None
+        return None, None
 
-def save_token(token: str):
-    exp_dt = _decode_jwt_exp(token) or (datetime.now(timezone.utc) + timedelta(hours=2))
-    data = {"access_token": token, "exp_iso": exp_dt.isoformat()}
-    with open(TOKEN_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print("[AUTH] Token saved, exp:", exp_dt.isoformat())
+def _token_still_valid(exp_dt: datetime | None, margin_minutes=5) -> bool:
+    if not exp_dt:
+        return False
+    now = datetime.now(timezone.utc)
+    return now < (exp_dt - timedelta(minutes=margin_minutes))
 
-def _try_extract_jwt_from_local_storage(page):
-    """Cari token di localStorage—banyak SPA menyimpan accessToken di sana."""
-    try:
-        keys = page.evaluate("Object.keys(window.localStorage)")
-        for k in keys:
-            v = page.evaluate(f"window.localStorage.getItem({json.dumps(k)})")
-            # jika value JSON, parse
-            try:
-                j = json.loads(v)
-                # cari kandidat field token
-                for cand in ["access_token", "accessToken", "token", "idToken", "jwt"]:
-                    if isinstance(j, dict) and j.get(cand) and isinstance(j[cand], str):
-                        t = j[cand]
-                        if JWT_RE.match(t):
-                            print(f"[AUTH] Found JWT in localStorage key={k} field={cand}")
-                            return t
-            except Exception:
-                # kalau bukan JSON, cek langsung string
-                if isinstance(v, str) and JWT_RE.match(v):
-                    print(f"[AUTH] Found JWT string in localStorage key={k}")
-                    return v
-        return None
-    except Exception as e:
-        print("[AUTH] localStorage scan error:", e)
-        return None
+def _guess_exp(token: str) -> datetime | None:
+    # coba baca dari JWT, jika gagal beri default 10 jam
+    exp_dt = _parse_jwt_exp(token)
+    if exp_dt:
+        return exp_dt
+    return datetime.now(timezone.utc) + timedelta(hours=10)
 
-def _try_extract_jwt_from_cookies(context):
-    try:
-        for c in context.cookies():
-            # kadang nama cookie mengandung token
-            if c.get("name") and "token" in c["name"].lower():
-                val = c.get("value", "")
-                if JWT_RE.match(val):
-                    print(f"[AUTH] Found JWT in cookie name={c['name']}")
-                    return val
-        return None
-    except Exception as e:
-        print("[AUTH] cookie scan error:", e)
-        return None
+# -------- core login & capture --------
 
-def login_and_capture_token(headless=True, timeout_ms=90000):
-    email = os.environ.get("STOCKBIT_EMAIL")
-    password = os.environ.get("STOCKBIT_PASSWORD")
-    if not email or not password:
-        raise RuntimeError("STOCKBIT_EMAIL & STOCKBIT_PASSWORD wajib diisi (Secrets/ENV).")
+def login_and_capture_token(headless: bool = True, timeout_sec: int = 90) -> str:
+    """
+    Login via Playwright → tangkap Authorization: Bearer ... dari request ke exodus.
+    Simpan ke TOKEN_PATH bersama 'exp' (dari JWT atau fallback +10 jam).
+    """
+    assert STOCKBIT_EMAIL and STOCKBIT_PASSWORD, "Set STOCKBIT_EMAIL & STOCKBIT_PASSWORD terlebih dahulu."
 
-    captured = {"token": None}
+    bearer_holder = {"token": None}
 
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=headless)
-        context = browser.new_context()
-        page = context.new_page()
-
-        # strategy A: tangkap dari request header
-        def on_request(req):
-            try:
-                if "exodus.stockbit.com" in req.url:
-                    auth = req.headers.get("authorization") or req.headers.get("Authorization")
-                    if auth and auth.lower().startswith("bearer "):
-                        captured["token"] = auth.split(" ", 1)[1].strip()
-                        print("[AUTH] Captured Bearer from exodus request")
-            except Exception:
-                pass
-
-        page.on("request", on_request)
-
-        # 1) Buka login
-        print("[AUTH] Opening login page…")
-        page.goto("https://stockbit.com/login", timeout=timeout_ms)
-
-        # 2) Isi form login (multi selector)
+    def _on_request(req):
         try:
-            page.get_by_placeholder("Email").fill(email)
-        except Exception:
-            page.locator("input[type='email'], input[name*='email']").first.fill(email)
-
-        try:
-            page.get_by_placeholder("Password").fill(password)
-        except Exception:
-            page.locator("input[type='password']").first.fill(password)
-
-        # Klik tombol login
-        try:
-            page.get_by_role("button", name=lambda n: "log" in n.lower() or "masuk" in n.lower()).click()
-        except Exception:
-            page.locator("button:has-text('Log'), button:has-text('Masuk')").first.click()
-
-        page.wait_for_load_state("domcontentloaded", timeout=timeout_ms)
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-
-        # 3) Strategy B: coba baca token dari localStorage/cookies setelah login
-        token = _try_extract_jwt_from_local_storage(page)
-        if not token:
-            token = _try_extract_jwt_from_cookies(context)
-
-        # 4) Strategy C: paksa halaman yang memicu panggilan exodus
-        print("[AUTH] Navigating to stream to trigger exodus calls…")
-        page.goto("https://stockbit.com/stream", timeout=timeout_ms)
-        page.wait_for_load_state("networkidle", timeout=timeout_ms)
-
-        # tunggu event request jika belum dapat token
-        t0 = time.time()
-        while not (captured["token"] or token) and time.time() - t0 < 35:
-            page.wait_for_timeout(500)
-            # ulangi cek localStorage
-            if not token:
-                token = _try_extract_jwt_from_local_storage(page)
-
-        browser.close()
-
-    final_token = captured["token"] or token
-    if not final_token:
-        raise RuntimeError("Gagal menangkap Bearer token dari request exodus atau localStorage/cookies.")
-
-    save_token(final_token)
-    return final_token
-def get_bearer_token():
-    # 1) Prioritas ENV: STOCKBIT_BEARER (secret)
-    env_tok = os.environ.get("STOCKBIT_BEARER")
-    if env_tok:
-        try:
-            save_token(env_tok.strip())
-            print("[AUTH] Using STOCKBIT_BEARER from env.")
-            return env_tok.strip()
+            url = req.url or ""
+            if EXODUS_HOST in url:
+                # cari header authorization
+                auth = None
+                for k, v in req.headers.items():
+                    if k.lower() == "authorization" and v:
+                        auth = v
+                        break
+                if auth:
+                    m = re.search(r"Bearer\s+(.+)", auth, flags=re.I)
+                    if m:
+                        bearer_holder["token"] = m.group(1).strip()
         except Exception:
             pass
 
-    # 2) Pakai token file jika masih valid
-    token = load_token_if_valid()
-    if token:
-        print("[AUTH] Using cached token.json")
-        return token
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=headless)
+        context = browser.new_context(locale="id-ID")
+        page = context.new_page()
 
-    # 3) Terakhir: coba login Playwright (kadang diblok headless di CI)
-    print("[AUTH] Falling back to Playwright login…")
+        context.on("request", _on_request)
+
+        print("[AUTH] Opening login page…")
+        page.goto("https://stockbit.com/#/login", wait_until="domcontentloaded", timeout=timeout_sec * 1000)
+
+        # form klasik
+        try:
+            page.fill('input[name="username"], input[name="email"]', STOCKBIT_EMAIL, timeout=15_000)
+        except Exception:
+            # beberapa layout pakai selector berbeda
+            page.fill('input[type="email"]', STOCKBIT_EMAIL, timeout=15_000)
+
+        try:
+            page.fill('input[name="password"]', STOCKBIT_PASSWORD, timeout=15_000)
+        except Exception:
+            page.fill('input[type="password"]', STOCKBIT_PASSWORD, timeout=15_000)
+
+        # klik tombol login
+        selectors = [
+            'button:has-text("Login")',
+            'button:has-text("Masuk")',
+            'button[type="submit"]',
+        ]
+        clicked = False
+        for sel in selectors:
+            try:
+                page.click(sel, timeout=3_000)
+                clicked = True
+                break
+            except Exception:
+                continue
+        if not clicked:
+            raise RuntimeError("Tidak menemukan tombol Login.")
+
+        # tunggu redirect / halaman stream
+        page.wait_for_timeout(1500)
+        print("[AUTH] Navigating to stream to trigger exodus calls…")
+        page.goto(STREAM_URL, wait_until="domcontentloaded", timeout=timeout_sec * 1000)
+
+        # picu beberapa aksi supaya request exodus muncul
+        for _ in range(6):
+            if bearer_holder["token"]:
+                break
+            # reload ringan
+            page.reload(wait_until="networkidle", timeout=timeout_sec * 1000)
+            page.wait_for_timeout(1500)
+
+        # fallback: coba baca dari localStorage/cookies
+        if not bearer_holder["token"]:
+            try:
+                # beberapa aplikasi menyimpan akses token di localStorage
+                ls = page.evaluate("() => Object.assign({}, window.localStorage)")
+                if isinstance(ls, dict):
+                    for k, v in ls.items():
+                        if not isinstance(v, str):
+                            continue
+                        if re.search(r"eyJ", v) and len(v) > 100:  # heuristik JWT
+                            bearer_holder["token"] = v
+                            break
+            except Exception:
+                pass
+
+        # last chance: sniff response headers (jika ada endpoint auth)
+        # (sudah cukup jarang diperlukan; request hook di atas biasanya cukup)
+
+        # pastikan token ketemu
+        token = bearer_holder["token"]
+        if not token:
+            # sebagai alternatif, beberapa halaman SPA butuh delay sedikit lebih lama
+            page.wait_for_timeout(2000)
+            token = bearer_holder["token"]
+
+        browser.close()
+
+    if not token:
+        raise RuntimeError("Gagal menangkap bearer dari request exodus atau localStorage/cookies.")
+
+    exp_dt = _guess_exp(token)
+    _save_token(token, exp_dt)
+    return token
+
+# -------- public API --------
+
+def get_bearer_token() -> str:
+    """
+    Ambil bearer siap pakai:
+      1) Jika token.json ada & belum mau kadaluarsa (margin 5 menit) → pakai itu
+      2) Jika env STOCKBIT_BEARER ada, dan kita tidak punya token.json valid → pakai env (simpan ke file + exp)
+      3) Jika tidak valid → login Playwright dan simpan baru
+    """
+    # 1) file token
+    tok, exp_dt = _load_token()
+    if tok and _token_still_valid(exp_dt, margin_minutes=5):
+        print("[AUTH] Using bearer from token.json.")
+        return tok
+
+    # 2) env bearer
+    env_tok = os.environ.get("STOCKBIT_BEARER")
+    if env_tok:
+        print("[AUTH] Using STOCKBIT_BEARER from env.")
+        exp_dt = _guess_exp(env_tok)
+        _save_token(env_tok, exp_dt)
+        return env_tok
+
+    # 3) login
     return login_and_capture_token(headless=True)
-
