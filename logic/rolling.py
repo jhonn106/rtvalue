@@ -1,63 +1,91 @@
 def rupiah(n):
     try:
-        return f"Rp{int(n):,}".replace(",", ".")
+        return f"Rp{int(float(n)):,}".replace(",", ".")
     except Exception:
         return str(n)
 
 def _iter_items(payload):
     """
-    Kembalikan iterator list item dari berbagai bentuk:
-    - {"data": [...]}
-    - {"data": {"items": [...]}}
-    - {"result": [...]}
-    - {"result": {"items": [...]}}
-    - atau langsung list
+    Normalisasi berbagai bentuk:
+    - {"data": {"mover_list": [...]}}
+    - {"data": {"items": [...]}} / {"result": {"items": [...]}}
+    - {"data": [...]} / {"result": [...]}
+    - langsung list
     """
     if isinstance(payload, list):
-        yield from payload
+        for it in payload:
+            yield it
         return
     if not isinstance(payload, dict):
         return
 
-    for topkey in ("data", "result"):
-        v = payload.get(topkey)
+    # Jalur baru Stockbit: data.mover_list
+    d = payload.get("data")
+    if isinstance(d, dict) and isinstance(d.get("mover_list"), list):
+        for it in d["mover_list"]:
+            yield it
+        return
+
+    # Varian umum sebelumnya
+    for top in ("data", "result"):
+        v = payload.get(top)
         if isinstance(v, list):
-            yield from v
+            for it in v:
+                yield it
             return
         if isinstance(v, dict):
             if isinstance(v.get("items"), list):
-                yield from v["items"]
+                for it in v["items"]:
+                    yield it
                 return
-            # kadang nested lagi
-            for k, vv in v.items():
+            # nested.items
+            for _, vv in v.items():
                 if isinstance(vv, dict) and isinstance(vv.get("items"), list):
-                    yield from vv["items"]
+                    for it in vv["items"]:
+                        yield it
                     return
 
-    # fallback: kalau ada key "items" di root
+    # Root items
     if isinstance(payload.get("items"), list):
-        yield from payload["items"]
+        for it in payload["items"]:
+            yield it
 
 def parse_market_mover(resp):
     """
-    Normalisasi item market-mover → list dict:
+    Kembalikan list:
       {'symbol','name','chg_pct','value','raw'}
+    Support struktur baru (data.mover_list).
     """
-    items = []
+    out = []
     for it in _iter_items(resp):
         if not isinstance(it, dict):
             continue
-        sym = it.get("symbol") or it.get("stock") or it.get("code")
+
+        # Struktur baru:
+        sd = it.get("stock_detail") or {}
+        sym = sd.get("code") or it.get("symbol") or it.get("stock") or it.get("code")
         if not sym:
             continue
-        name = it.get("name") or it.get("company_name") or ""
-        chg  = it.get("change_percent") or it.get("chg_pct") or it.get("percentageChange")
-        val  = it.get("value") or it.get("traded_value") or it.get("total_value")
-        items.append({
+        name = sd.get("name") or it.get("name") or ""
+        chg  = None
+        ch = it.get("change")
+        if isinstance(ch, dict):
+            chg = ch.get("percentage")  # sudah dalam persen, contoh: 34.44
+        if chg is None:
+            chg = it.get("change_percent") or it.get("chg_pct") or it.get("percentageChange")
+
+        val = None
+        vv = it.get("value")
+        if isinstance(vv, dict) and "raw" in vv:
+            val = vv["raw"]
+        if val is None:
+            val = it.get("value") or it.get("traded_value") or it.get("total_value")
+
+        out.append({
             "symbol": sym,
             "name": name,
             "chg_pct": chg,
             "value": val,
             "raw": it
         })
-    return items
+    return out
