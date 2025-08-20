@@ -144,20 +144,28 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
             lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
     lines.append("")
 
-    # --- TABEL: Top Value (symbol · %kenaikan · last · value)
+
+        # --- TABEL: Top Value (symbol · %kenaikan · last · value)
     lines.append("— Top Value —")
     if not values:
         lines.append("  (kosong)")
     else:
-        lines.append("  Symbol  |   % Up   |  Last  |        Value")
-        lines.append("  --------+----------+--------+----------------")
-        for v in values:
-            sym = v["symbol"]
-            chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
-            last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
-            val = rupiah(v["value"] if v["value"] is not None else 0)
-            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
+        # filter hanya yg chg_pct > 0
+        filt = [v for v in values if (v.get("chg_pct") or 0) > 0]
+
+        if not filt:
+            lines.append("  (tidak ada saham naik)")
+        else:
+            lines.append("  Symbol  |   % Up   |  Last  |        Value")
+            lines.append("  --------+----------+--------+----------------")
+            for v in filt:
+                sym = v["symbol"]
+                chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
+                last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
+                val = rupiah(v["value"] if v["value"] is not None else 0)
+                lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
     lines.append("")
+
 
 
     # --- TABEL: RT Most Active (by value)
