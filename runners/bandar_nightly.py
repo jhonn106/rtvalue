@@ -10,17 +10,17 @@ from clients import stockbit
 TZ = pytz.timezone("Asia/Jakarta")
 
 DATA_DIR = Path("data/bandar")
+RAW_DIR = DATA_DIR / "raw"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-# kirim ke bot Telegram #3 (pisah dari bot snapshot/rt)
 TG_TOKEN = os.environ.get("TG_TOKEN") or os.environ.get("TG_TOKEN_BANDAR")
-TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3")
+TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3") or os.environ.get("BANDAR_TG_CHAT_ID")
 
-
-MAX_SYMBOLS = 20   # kirim maksimal 20 saham
-ROLLING_DAYS = 5   # kumpulkan 5 hari (Senin–Sabtu)
-
-# ===============================================
+MAX_SYMBOLS = 20
+ROLLING_DAYS = 5
+API_RETRIES = 3
+API_SLEEP = 2  # detik antar-retry
 
 def now_id():
     return datetime.now(TZ)
@@ -50,22 +50,8 @@ def _send_tg(text: str):
         print("[BANDAR ERR]", e)
 
 def _classify(x):
-    """
-    Implementasi ekuivalen dari:
-    =IF(C2>30,"3BA",
-      IF(C2<-30,"3BD",
-        IF(AND(C2>=20,C2<30),"2BA",
-          IF(AND(C2>=10,C2<20),"1BA",
-            IF(AND(C2=0),"No",
-              IF(AND(C2>-20,C2<-10),"1BD",
-                IF(AND(C2>-30,C2<-20),"2BD",
-                  IF(AND(C2>-10,C2<0),"ND",
-                    IF(AND(C2>0,C2<10),"NA","nan")))))))))
-    """
-    try:
-        v = float(x)
-    except Exception:
-        return "nan"
+    try: v = float(x)
+    except Exception: return "nan"
     if v > 30: return "3BA"
     if v < -30: return "3BD"
     if 20 <= v < 30: return "2BA"
@@ -77,57 +63,107 @@ def _classify(x):
     if 0 < v < 10: return "NA"
     return "nan"
 
+def _norm_symbol(x):
+    if not x: return None
+    s = str(x).strip().upper()
+    # hapus spasi aneh
+    return "".join(ch for ch in s if ch.isalnum())
+
 def _parse_akumulasi(resp):
     """
-    Normalisasi output API ke list: [{'symbol': 'BBCA', 'value': <float>}]
-    Struktur umum screener: {"data": {"rows": [{"symbol": "...", "value": 12.3}, ...]}}
-    tapi kita buat robust.
+    Kembalikan list [{'symbol': 'BBCA', 'value': float}, ...]
+    Dukung beberapa bentuk:
+      A) {"data":{"rows":[{"symbol":"BBCA","value":12.3}, ...]}}
+      B) {"data":{"columns":["symbol","value"],"rows":[["BBCA",12.3], ...]}}
+      C) {"rows":[...]} atau {"items":[...]} atau list langsung
     """
     out = []
+
+    def _try_rows(rows):
+        nonlocal out
+        if not isinstance(rows, list): return
+        # kasus dict per baris
+        if rows and isinstance(rows[0], dict):
+            for r in rows:
+                sym = _norm_symbol(r.get("symbol") or r.get("code") or r.get("stock") or r.get("ticker"))
+            #  tambahkan if within loop
+                if not sym: continue
+                val = r.get("value")
+                if val is None: val = r.get("akum") or r.get("accum") or r.get("score") or r.get("C") or r.get("c")
+                try:
+                    out.append({"symbol": sym, "value": float(val)})
+                except Exception:
+                    continue
+            return
+        # kasus array per baris + columns
+        # ini akan ditangani di luar pakai _try_table jika columns diketahui
+
+    def _try_table(columns, rows):
+        nonlocal out
+        if not isinstance(columns, list) or not isinstance(rows, list): return
+        # cari index kolom simbol & value
+        cols = [str(c).lower() for c in columns]
+        try:
+            i_sym = next(i for i,c in enumerate(cols) if c in ("symbol","code","stock","ticker"))
+        except StopIteration:
+            return
+        # value bisa "value","akum","accum","score","c"
+        cand_vals = ("value","akum","accum","score","c")
+        i_val = None
+        for k in cand_vals:
+            if k in cols:
+                i_val = cols.index(k); break
+        if i_val is None: return
+        # parse
+        for row in rows:
+            if not isinstance(row, (list, tuple)): continue
+            if len(row) <= max(i_sym, i_val): continue
+            sym = _norm_symbol(row[i_sym])
+            if not sym: continue
+            try:
+                out.append({"symbol": sym, "value": float(row[i_val])})
+            except Exception:
+                continue
+
+    # mulai parse
     if isinstance(resp, dict):
         d = resp.get("data") or resp.get("result") or {}
-        rows = None
-        # beberapa screener menyimpan di "rows" atau langsung list
-        if isinstance(d, dict):
-            for k in ("rows", "items", "list"):
-                if isinstance(d.get(k), list):
-                    rows = d.get(k)
-                    break
-            if rows is None and isinstance(d.get("data"), list):
-                rows = d.get("data")
-        if rows is None and isinstance(resp.get("rows"), list):
-            rows = resp.get("rows")
-        if rows is None and isinstance(resp.get("items"), list):
-            rows = resp.get("items")
-        if rows is None and isinstance(resp.get("list"), list):
-            rows = resp.get("list")
-        if rows is None and isinstance(resp.get("data"), list):
-            rows = resp.get("data")
-
-        if isinstance(rows, list):
-            for r in rows:
-                if not isinstance(r, dict): 
-                    continue
-                sym = r.get("symbol") or r.get("code") or r.get("stock") or r.get("ticker")
-                # field nilai akumulasi – coba beberapa nama
-                val = r.get("value")
-                if val is None:
-                    val = r.get("akum") or r.get("accum") or r.get("score") or r.get("C") or r.get("c")
-                if not sym: 
-                    continue
-                try:
-                    val = float(val)
-                except Exception:
-                    continue
-                out.append({"symbol": sym, "value": val})
+        # bentuk A: rows dict
+        for key in ("rows","items","list","data"):
+            v = d.get(key)
+            if isinstance(v, list):
+                _try_rows(v)
+        # bentuk B: columns + rows (tabel)
+        cols = None; rows = None
+        if isinstance(d, dict) and isinstance(d.get("columns"), list):
+            cols = d.get("columns")
+            # rows bisa di "rows" atau "data"
+            rows = d.get("rows") if isinstance(d.get("rows"), list) else d.get("data")
+            _try_table(cols, rows)
+        # fallback di root
+        if not out:
+            for key in ("rows","items","list","data"):
+                v = resp.get(key)
+                if isinstance(v, list):
+                    _try_rows(v)
     elif isinstance(resp, list):
+        # list langsung, coba dict per-baris
         for r in resp:
-            if isinstance(r, dict) and r.get("symbol") and r.get("value") is not None:
+            if isinstance(r, dict):
+                sym = _norm_symbol(r.get("symbol") or r.get("code") or r.get("stock") or r.get("ticker"))
+                if not sym: continue
+                val = r.get("value")
+                if val is None: val = r.get("akum") or r.get("accum") or r.get("score") or r.get("C") or r.get("c")
                 try:
-                    out.append({"symbol": r["symbol"], "value": float(r["value"])})
+                    out.append({"symbol": sym, "value": float(val)})
                 except Exception:
-                    pass
-    return out
+                    continue
+
+    # hapus duplikat symbol, ambil terakhir
+    uniq = {}
+    for r in out:
+        uniq[r["symbol"]] = r["value"]
+    return [{"symbol": s, "value": v} for s,v in uniq.items()]
 
 def _save_csv_daily(day_path_csv: Path, rows):
     with day_path_csv.open("w", newline="", encoding="utf-8") as f:
@@ -137,98 +173,86 @@ def _save_csv_daily(day_path_csv: Path, rows):
             w.writerow([r["symbol"], r["value"], _classify(r["value"])])
 
 def _date_range_last_n(n_days: int, end_date: datetime):
-    """Hasilkan list tanggal (YYYY-MM-DD) mundur n hari kalendar (termasuk end_date)."""
-    out = []
-    for i in range(n_days):
-        d = (end_date - timedelta(days=i)).date().isoformat()
-        out.append(d)
-    return out  # [YYYY-MM-DD, kemarin, dst]
+    return [(end_date - timedelta(days=i)).date().isoformat() for i in range(n_days)]
 
 def _sum_rolling_5d():
-    """
-    Baca file harian 5 hari terakhir → jumlahkan value per symbol,
-    sekalian simpan class untuk hari TERAKHIR (opsional).
-    """
     today = now_id()
     dates = _date_range_last_n(ROLLING_DAYS, today)
     acc = {}
-    last_class = {}  # class terbaru (hari terakhir tersedia)
     for ds in dates:
         day_json = DATA_DIR / f"{ds}.json"
         rows = _read_json(day_json, default=[])
-        if not isinstance(rows, list):
-            continue
+        if not isinstance(rows, list): continue
         for r in rows:
-            sym = r.get("symbol")
-            val = r.get("value")
-            if sym is None or val is None:
-                continue
-            try:
-                v = float(val)
-            except Exception:
-                continue
+            sym = r.get("symbol"); val = r.get("value")
+            if sym is None or val is None: continue
+            try: v = float(val)
+            except Exception: continue
             acc[sym] = acc.get(sym, 0.0) + v
-            last_class[sym] = _classify(v)  # class per-hari (opsional)
-    # hasil: list dict
-    out = []
-    for sym, total in acc.items():
-        out.append({"symbol": sym, "total_value": total})
-    # urut desc by total_value
+    out = [{"symbol": s, "total_value": v} for s, v in acc.items()]
     out.sort(key=lambda x: x["total_value"], reverse=True)
     return out
 
-def _rupiah(n):
-    try:
-        return f"Rp{int(n):,}".replace(",", ".")
-    except Exception:
-        return str(n)
-
 def main():
-    # 1) ambil data akumulasi dari API
-    resp = stockbit.akumulasi_custom()
-    rows = _parse_akumulasi(resp)
-
-    # 2) simpan harian (json+csv)
     ds = now_id().date().isoformat()
     day_json = DATA_DIR / f"{ds}.json"
     day_csv  = DATA_DIR / f"{ds}.csv"
+    raw_json = RAW_DIR / f"{ds}.raw.json"
+
+    # 1) ambil data (retry) + simpan raw
+    resp = None
+    for i in range(API_RETRIES):
+        try:
+            resp = stockbit.akumulasi_custom()
+            break
+        except Exception as e:
+            print("[BANDAR] fetch error:", e)
+            time.sleep(API_SLEEP)
+    if resp is None:
+        _send_tg("⚠️ Bandar Nightly: gagal ambil data (resp=None).")
+        return
+
+    _save_json(raw_json, resp)  # simpan raw untuk debugging
+
+    # 2) parse → rows
+    rows = _parse_akumulasi(resp)
+    print(f"[BANDAR] parsed rows = {len(rows)}")
+
+    if not rows:
+        # JANGAN overwrite file harian kalau kosong — kirim warning saja.
+        _send_tg("⚠️ Bandar Nightly: data kosong dari screener. File harian tidak diupdate.")
+        # Tetap update rolling_5d agar tidak error (pakai data sebelumnya)
+        roll = _sum_rolling_5d()
+        _save_json(DATA_DIR / "rolling_5d.json", {"date": ds, "top": roll[:MAX_SYMBOLS], "count_all": len(roll)})
+        return
+
+    # 3) simpan harian (json+csv)
     _save_json(day_json, rows)
     _save_csv_daily(day_csv, rows)
 
-    # 3) hitung rolling 5 hari
-    roll = _sum_rolling_5d()
-
-    # 4) filter kategori (3BA & 2BA) berdasarkan nilai HARI INI untuk label,
-    #    tapi ranking tetap pakai total 5D
-    #    – kalau mau kategori berdasarkan total (rata-rata harian), tinggal diganti logikanya.
+    # 4) rolling 5D dan filter kategori hari-ini (3BA/2BA)
     today_map = {r["symbol"]: r["value"] for r in rows}
     def _class_today(sym):
         v = today_map.get(sym)
         return _classify(v) if v is not None else "nan"
 
-    # Ambil hanya 3BA & 2BA, lalu top-N by total_value
+    roll = _sum_rolling_5d()
     filt = [r for r in roll if _class_today(r["symbol"]) in ("3BA","2BA")]
     top = filt[:MAX_SYMBOLS]
 
-    # 5) kirim ke Telegram
-    title = f"📊 Bandar Accumulation 5D (per {ds}) — Kategori 3BA & 2BA (Top {MAX_SYMBOLS})"
+    # 5) kirim telegram ringkas (kalau mau versi panjang, mudah ditambah)
+    title = f"📊 Bandar Accumulation 5D (per {ds}) — 3BA & 2BA (Top {MAX_SYMBOLS})"
     lines = [title, ""]
-    rank = 1
-    for r in top:
-        sym = r["symbol"]
-        tot = r["total_value"]
-        cls = _class_today(sym)
-        lines.append(f"{rank}. {sym:<6} {tot:+.2f}  [{cls}]")
-        rank += 1
+    if not top:
+        lines.append("(tidak ada 3BA/2BA hari ini)")
+    else:
+        for i, r in enumerate(top, 1):
+            sym = r["symbol"]; tot = r["total_value"]; cls = _class_today(sym)
+            lines.append(f"{i}. {sym:<6} {tot:+.2f}  [{cls}]")
+    _send_tg("\n".join(lines))
 
-    if len(top) == 0:
-        lines.append("(tidak ada saham kategori 3BA/2BA hari ini)")
-    msg = "\n".join(lines)
-    _send_tg(msg)
-
-    # 6) simpan ringkasan rolling_5d
-    roll_path = DATA_DIR / "rolling_5d.json"
-    _save_json(roll_path, {"date": ds, "top": top, "count_all": len(roll)})
+    # 6) simpan ringkasan rolling
+    _save_json(DATA_DIR / "rolling_5d.json", {"date": ds, "top": top, "count_all": len(roll)})
 
 if __name__ == "__main__":
     main()
