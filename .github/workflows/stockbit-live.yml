@@ -1,0 +1,73 @@
+name: Stockbit Live
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 08:55 WIB = 01:55 UTC (Senin–Jumat)
+    - cron: "55 1 * * 1-5"
+
+jobs:
+  snapshots:
+    runs-on: ubuntu-latest
+    timeout-minutes: 500   # cukup sampai lewat jam 16:15 WIB
+    env:
+      STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
+      STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
+      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}
+      STOCKBIT_TOKEN_PATH: token.json
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID: ${{ secrets.TG_CHAT_ID1 }}   # kirim snapshot ke chat #1
+      TG_CHAT_ID1: ${{ secrets.TG_CHAT_ID1 }}
+      TG_CHAT_ID2: ${{ secrets.TG_CHAT_ID2 }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: Make packages importable
+        run: |
+          python - <<'PY'
+          import pathlib
+          for p in ["auth","clients","logic","notif","runners"]:
+              pathlib.Path(p, "__init__.py").touch()
+          print("created __init__.py files")
+          PY
+      - name: Run market loop (08:55 → 16:15 WIB)
+        run: python -m runners.market_loop
+
+  rt-alerts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 500
+    env:
+      STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
+      STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
+      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}
+      STOCKBIT_TOKEN_PATH: token.json
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID1: ${{ secrets.TG_CHAT_ID1 }}
+      TG_CHAT_ID2: ${{ secrets.TG_CHAT_ID2 }}   # RT Alerts ke chat #2
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install Playwright
+        run: python -m playwright install --with-deps chromium
+      - name: Make packages importable
+        run: |
+          python - <<'PY'
+          import pathlib
+          for p in ["auth","clients","logic","notif","runners"]:
+              pathlib.Path(p, "__init__.py").touch()
+          print("created __init__.py files")
+          PY
+      - name: Run RT alerts loop
+        run: python -m runners.rt_alerts
