@@ -41,7 +41,7 @@ def _extract_rt_list(rt_raw):
     return []
 
 
-def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=50, pb_interval="10m"):
+def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval="10m"):
     gainers_raw = stockbit.top_gainer()
     values_raw  = stockbit.top_value()
 
