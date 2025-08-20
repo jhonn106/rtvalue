@@ -7,6 +7,21 @@ on:
     - cron: "*/10 2 * * 1-5"
 
 jobs:
+- name: Debug Telegram chat id
+  run: |
+    python - <<'PY'
+    import os, requests, json
+    tok=os.environ["TG_TOKEN"]
+    r=requests.get(f"https://api.telegram.org/bot{tok}/getUpdates", timeout=15)
+    print(r.text)
+    u=r.json()
+    if "result" in u and u["result"]:
+        chat=u["result"][-1]["message"]["chat"]
+        print("Detected chat:", chat)
+    else:
+        print("Kirim pesan /start ke bot dulu, lalu rerun workflow.")
+    PY
+
   run-snapshot:
     runs-on: ubuntu-latest
     env:
