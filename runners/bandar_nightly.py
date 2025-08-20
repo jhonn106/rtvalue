@@ -20,17 +20,30 @@ TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3") or os.environ.get("BANDAR_TG_CHAT_ID
 MAX_SYMBOLS = 20
 ROLLING_DAYS = 5
 
-CAPTURE_NAME = os.environ.get("BANDAR_SCREENER_NAME", "akum ihsg")
-CAPTURE_TEMPLATE_ID = os.environ.get("BANDAR_TEMPLATE_ID", "4272542")
-try:
-    CAPTURE_TEMPLATE_ID = int(CAPTURE_TEMPLATE_ID)
-except Exception:
-    CAPTURE_TEMPLATE_ID = 4272542
 
-CAPTURE_TIMEOUT_MS = 60_000
-CAPTURE_RETRIES = 2
-RETRY_SLEEP = 3
+CAPTURE_NAME = os.environ.get("BANDAR_SCREENER_NAME", "akum ihsg")
+CAPTURE_TEMPLATE_ID = int(os.environ.get("BANDAR_TEMPLATE_ID", "4272542"))
 CAPTURE_DEBUG = os.environ.get("BANDAR_DEBUG") == "1"
+
+# ...
+meta = None
+for i in range(1 + CAPTURE_RETRIES):
+    try:
+        meta = get_screener_results_by_name(
+            name=CAPTURE_NAME,
+            headless=True,
+            timeout_ms=CAPTURE_TIMEOUT_MS,
+            template_id=CAPTURE_TEMPLATE_ID,
+            per_page=2000,
+            debug=CAPTURE_DEBUG,
+            debug_dir=str(RAW_DIR),
+        )
+        break
+    except Exception as e:
+        print(f"[BANDAR] capture error (try {i+1}/{1+CAPTURE_RETRIES}):", e)
+        time.sleep(RETRY_SLEEP)
+
+
 
 def now_id(): return datetime.now(TZ)
 
