@@ -80,12 +80,13 @@ def _to_num(s):
 # ============ Main ============
 
 def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval="10m"):
-    # --- TOP GAINER / VALUE
-    gainers_raw = stockbit.top_gainer()
-    values_raw  = stockbit.top_value()
+   # --- TOP GAINER / VALUE
+gainers_raw = stockbit.top_gainer()
+values_raw  = stockbit.top_value()
 
-    gainers = parse_market_mover(gainers_raw)[:top_n]
-    values  = parse_market_mover(values_raw)[:top_n]
+gainers = parse_market_mover(gainers_raw)[:top_n]   # ini boleh langsung 10
+values_all  = parse_market_mover(values_raw)        # JANGAN slice di sini
+
 
     # --- RUNNING TRADE
     rt_raw  = stockbit.running_trade(limit=rt_limit)
@@ -145,26 +146,23 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
     lines.append("")
 
 
-        # --- TABEL: Top Value (symbol · %kenaikan · last · value)
-    lines.append("— Top Value —")
-    if not values:
-        lines.append("  (kosong)")
-    else:
-        # filter hanya yg chg_pct > 0
-        filt = [v for v in values if (v.get("chg_pct") or 0) > 0]
+   # --- TABEL: Top Value (symbol · %kenaikan · last · value)
+lines.append("— Top Value —")
+# ambil hanya yang naik, lalu ambil 10 teratas (urut bawaan API sudah by value)
+values_pos = [v for v in values_all if (v.get("chg_pct") or 0) > 0][:top_n]
 
-        if not filt:
-            lines.append("  (tidak ada saham naik)")
-        else:
-            lines.append("  Symbol  |   % Up   |  Last  |        Value")
-            lines.append("  --------+----------+--------+----------------")
-            for v in filt:
-                sym = v["symbol"]
-                chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
-                last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
-                val = rupiah(v["value"] if v["value"] is not None else 0)
-                lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
-    lines.append("")
+if not values_pos:
+    lines.append("  (tidak ada saham naik)")
+else:
+    lines.append("  Symbol  |   % Up   |  Last  |        Value")
+    lines.append("  --------+----------+--------+----------------")
+    for v in values_pos:
+        sym = v["symbol"]
+        chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
+        last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
+        val = rupiah(v["value"] if v["value"] is not None else 0)
+        lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
+lines.append("")
 
 
 
