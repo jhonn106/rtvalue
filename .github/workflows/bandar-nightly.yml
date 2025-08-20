@@ -21,6 +21,8 @@ jobs:
       TG_CHAT_ID3: ${{ secrets.TG_CHAT_ID3 }}   # chat id bot bandar
       BANDAR_TEMPLATE_ID: "4272542"
       BANDAR_SCREENER_NAME: "akum ihsg"
+      BANDAR_DEBUG: "1"   # optional: simpan screenshot debug ke data/bandar/raw
+
 
 
     steps:
