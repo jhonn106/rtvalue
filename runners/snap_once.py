@@ -8,7 +8,7 @@ from notif.telegram import send as tg_send
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# ================== Helpers format ==================
+# ================== Helpers ==================
 def now_id():
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
@@ -65,14 +65,8 @@ def _to_num(s):
     except Exception:
         return 0
 
-def _pretty(obj, n=800):
-    try:
-        return json.dumps(obj, ensure_ascii=False)[:n]
-    except Exception:
-        return str(obj)[:n]
-
 # ================== Main ==================
-def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval="10m"):
+def run(top_n=10, include_powerbuy=True, pb_limit=20, rt_limit=500, pb_interval="10m"):
     # --- TOP GAINER / VALUE (ambil bahan)
     gainers_raw = stockbit.top_gainer()
     values_raw  = stockbit.top_value()
@@ -120,7 +114,7 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
             cur["price"] = price
         agg[s] = cur
 
-    # ====== Compose report (rapi) ======
+    # ====== Compose report ======
     lines = []
     lines.append(f"📊 Stockbit Snapshot {now_id()}")
     lines.append(f"(info: gainers={len(gainers)}, values_pos={len(values_pos)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
@@ -171,11 +165,11 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
             lines.append(f"  {sym:<7} | {last:>6} | {lot:>7} | {val:>14}")
     lines.append("")
 
-    # --- TABEL: PowerBuy (trade-book)
+    # --- TABEL: PowerBuy Top Buyers (Total Hari Ini, sum semua bucket 10m)
     if include_powerbuy:
-        lines.append(f"— PowerBuy ({pb_interval}) —")
+        lines.append(f"— PowerBuy Top Buyers (Total Hari Ini, {pb_interval}) —")
 
-        # daftar unik dari gainers + values_pos (supaya fokus yang relevan)
+        # kandidat simbol: dari Top Gainer + Top Value (yang naik)
         uniq = []
         for x in gainers + values_pos:
             s = x["symbol"]
@@ -183,63 +177,55 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
                 uniq.append(s)
 
         def _extract_pb_rows(pb_obj):
-            """
-            Bentuk umum terbaru:
-              {"data":{"book":[
-                 {"time":"10:15","price":"", "buy":{"lot":"…","frequency":"…"}, "sell":{"lot":"…","frequency":"…"}}
-              ]}}
-            """
             if not isinstance(pb_obj, dict): return []
             d = pb_obj.get("data")
-            if isinstance(d, dict) and isinstance(d.get("book"), list):
+            if isinstance(d, dict) and isinstance(d.get("book"), list):   # struktur terbaru
                 return d["book"]
-            # fallback lama (tidak dipakai di data terkini, tapi biarkan)
+            # fallback kemungkinan lama
             if isinstance(d, dict) and isinstance(d.get("intervals"), list):
                 return d["intervals"]
             if isinstance(d, dict) and isinstance(d.get("items"), list):
                 return d["items"]
             return []
 
-        # Kumpulkan ringkasan PB (ambil baris terakhir untuk setiap simbol)
-        pb_rows = []
+        totals = []
         for sym in uniq[:pb_limit]:
             try:
                 pb = stockbit.powerbuy(sym, interval=pb_interval)
                 rows = _extract_pb_rows(pb)
-                if rows:
-                    last = rows[-1]
-                    buy = last.get("buy") or {}
-                    sell = last.get("sell") or {}
-                    buy_lot  = _to_num(buy.get("lot"))
-                    sell_lot = _to_num(sell.get("lot"))
-                    total_lot = buy_lot + sell_lot
-                    br = (buy_lot / total_lot) if total_lot > 0 else None
-                    pb_rows.append({
-                        "symbol": sym,
-                        "buy_lot": buy_lot,
-                        "sell_lot": sell_lot,
-                        "total_lot": total_lot,
-                        "buy_ratio": br,
-                    })
-                time.sleep(0.15)
+                if not rows:
+                    continue
+                tot_buy = tot_sell = 0
+                for r in rows:
+                    buy  = (r.get("buy")  or {})
+                    sell = (r.get("sell") or {})
+                    tot_buy  += _to_num(buy.get("lot"))
+                    tot_sell += _to_num(sell.get("lot"))
+                total_lot = tot_buy + tot_sell
+                totals.append({
+                    "symbol": sym,
+                    "buy_lot": tot_buy,
+                    "sell_lot": tot_sell,
+                    "total_lot": total_lot,
+                    "buy_ratio": (tot_buy / total_lot) if total_lot > 0 else None
+                })
+                time.sleep(0.10)
             except Exception:
-                # skip simbol bermasalah
                 pass
 
-        if not pb_rows:
+        if not totals:
             lines.append("  (tidak ada data)")
         else:
-            # urutkan by total lot desc
-            pb_rows.sort(key=lambda r: r["total_lot"], reverse=True)
-            lines.append("  Symbol  |  Buy%  |   Buy Lot   |  Sell Lot   |  Total Lot")
-            lines.append("  --------+--------+-------------+-------------+------------")
-            for r in pb_rows:
-                sym = r["symbol"]
-                br  = f"{r['buy_ratio']*100:5.1f}%" if r["buy_ratio"] is not None else "  n/a"
-                bl  = id_int(r["buy_lot"])
-                sl  = id_int(r["sell_lot"])
-                tl  = id_int(r["total_lot"])
-                lines.append(f"  {sym:<7} | {br:>6} | {bl:>11} | {sl:>11} | {tl:>10}")
+            # Urutkan berdasar TOTAL BUY LOT terbesar
+            totals.sort(key=lambda r: r["buy_lot"], reverse=True)
+            lines.append("  Symbol  |  Buy%  |   Total Buy   |  Total Sell  |  Total Lot")
+            lines.append("  --------+--------+---------------+--------------+------------")
+            for r in totals[:10]:
+                br = ("{:5.1f}%".format(r["buy_ratio"]*100) if r["buy_ratio"] is not None else "  n/a")
+                bl = id_int(r["buy_lot"])
+                sl = id_int(r["sell_lot"])
+                tl = id_int(r["total_lot"])
+                lines.append(f"  {r['symbol']:<7} | {br:>6} | {bl:>13} | {sl:>12} | {tl:>10}")
 
     # Kirim / print
     tg_send("\n".join(lines))
