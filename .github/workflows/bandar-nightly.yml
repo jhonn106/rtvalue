@@ -1,0 +1,45 @@
+name: Bandar Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    # 20:00 WIB = 13:00 UTC, Senin–Sabtu
+    - cron: "0 13 * * 1-6"
+
+jobs:
+  nightly-bandar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
+      STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
+      STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}
+      STOCKBIT_TOKEN_PATH: token.json
+      TG_TOKEN: ${{ secrets.TG_TOKEN }}
+      TG_CHAT_ID3: ${{ secrets.TG_CHAT_ID3 }}   # bot telegram #3 khusus bandarmology
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.11" }
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Install Playwright (untuk auto-refresh token via TokenManager bila perlu)
+        run: python -m playwright install --with-deps chromium
+      - name: Make packages importable
+        run: |
+          python - <<'PY'
+          import pathlib
+          for p in ["auth","clients","logic","notif","runners"]:
+              pathlib.Path(p, "__init__.py").touch()
+          print("created __init__.py files")
+          PY
+      - name: Run Bandar Nightly
+        run: python -m runners.bandar_nightly
+      - name: Persist data folder
+        if: always()
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore(bandar): update nightly data"
+          file_pattern: data/bandar/*.json data/bandar/*.csv
