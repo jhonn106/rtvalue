@@ -52,6 +52,15 @@ jobs:
           print("✅ Token OK, length =", len(t))
           print("🔑 Prefix:", t[:15] + "...")
           PY
+          - name: Debug secrets presence
+  run: |
+    python - <<'PY'
+    import os
+    print("Email present?", bool(os.environ.get('STOCKBIT_EMAIL')))
+    print("Password present?", bool(os.environ.get('STOCKBIT_PASSWORD')))
+    print("Bearer present?", bool(os.environ.get('STOCKBIT_BEARER')))
+    PY
+
 
       - name: Run snapshot once
         run: |
