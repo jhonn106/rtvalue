@@ -3,9 +3,8 @@ name: Stockbit Snapshot
 on:
   workflow_dispatch:
   schedule:
-    # contoh: setiap 10 menit antara 02:00–03:00 UTC (09:00–10:00 WIB) di hari kerja
+    # contoh: setiap 10 menit antara 02:00–03:00 UTC (≈ 09:00–10:00 WIB) di hari kerja
     - cron: "*/10 2 * * 1-5"
-    # tambahkan jadwal lain sesuai kebutuhan (mis. 02:00–08:00 UTC untuk jam pasar penuh)
 
 jobs:
   run-snapshot:
@@ -15,7 +14,8 @@ jobs:
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       TG_TOKEN: ${{ secrets.TG_TOKEN }}
       TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
-      STOCKBIT_TOKEN_PATH: token.json   # tersimpan sebagai artifact kerja
+      STOCKBIT_TOKEN_PATH: token.json   # file token disimpan di workspace
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,15 +33,25 @@ jobs:
       - name: Install Playwright
         run: |
           python -m playwright install --with-deps chromium
-          
-- name: Test Stockbit login (capture bearer)
-  run: |
-    python - <<'PY'
-    from auth.stockbit_login import get_bearer_token
-    t = get_bearer_token()
-    print("✅ Token OK, length =", len(t))
-    print("🔑 Prefix:", t[:15] + "...")
-    PY
+
+      # pastikan folder jadi package agar bisa import runners.*
+      - name: Make packages importable
+        run: |
+          python - <<'PY'
+          import pathlib
+          for p in ["auth","clients","logic","notif","runners"]:
+              pathlib.Path(p, "__init__.py").touch()
+          print("created __init__.py files")
+          PY
+
+      - name: Test Stockbit login (capture bearer)
+        run: |
+          python - <<'PY'
+          from auth.stockbit_login import get_bearer_token
+          t = get_bearer_token()
+          print("✅ Token OK, length =", len(t))
+          print("🔑 Prefix:", t[:15] + "...")
+          PY
 
       - name: Run snapshot once
         run: |
