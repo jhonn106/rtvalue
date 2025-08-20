@@ -15,20 +15,21 @@ RAW_DIR = DATA_DIR / "raw"
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-# Token & chat khusus bot Bandar (dipisah dari bot lain)
+# Token & chat khusus bot Bandar
 TG_TOKEN = os.environ.get("TG_TOKEN_BANDAR") or os.environ.get("TG_TOKEN")
 TG_CHAT_ID3 = os.environ.get("TG_CHAT_ID3") or os.environ.get("BANDAR_TG_CHAT_ID")
 
 MAX_SYMBOLS = 20
 ROLLING_DAYS = 5
-CAPTURE_NAME = os.environ.get("BANDAR_SCREENER_NAME", "akum ihsg")  # teks di UI Screener (case-insensitive)
 
-# Retry (kalau jaringan lagi lambat)
+# Nama & ID template (set keduanya agar robust)
+CAPTURE_NAME = os.environ.get("BANDAR_SCREENER_NAME", "akum ihsg")  # case-insensitive
+CAPTURE_TEMPLATE_ID = os.environ.get("BANDAR_TEMPLATE_ID")  # "4272542" (str)
+CAPTURE_TEMPLATE_ID = int(CAPTURE_TEMPLATE_ID) if CAPTURE_TEMPLATE_ID and CAPTURE_TEMPLATE_ID.isdigit() else 4272542
+
 CAPTURE_TIMEOUT_MS = 60_000
 CAPTURE_RETRIES = 2
-RETRY_SLEEP = 3  # detik
-
-# ===============================================
+RETRY_SLEEP = 3
 
 def now_id():
     return datetime.now(TZ)
@@ -58,7 +59,6 @@ def _send_tg(text: str):
         print("[BANDAR ERR]", e)
 
 def _classify(x):
-    """Rule persis seperti formula Excel yang kamu kasih."""
     try:
         v = float(x)
     except Exception:
@@ -80,13 +80,6 @@ def _norm_symbol(x):
     return "".join(ch for ch in s if ch.isalnum())
 
 def _parse_akumulasi(resp):
-    """
-    Kembalikan list [{'symbol': 'BBCA', 'value': float}, ...]
-    Dukung pola umum hasil screener:
-      - {"data":{"columns":[...], "rows":[ ... ]}}
-      - {"data":{"rows":[{"symbol":"...","value":12.3}, ...]}}
-      - fallback lain (rows/items/list)
-    """
     out = []
 
     def _try_rows(rows):
@@ -128,7 +121,6 @@ def _parse_akumulasi(resp):
             except Exception:
                 continue
 
-    # Pola umum "results"
     if isinstance(resp, dict):
         d = resp.get("data") or {}
         if isinstance(d.get("columns"), list) and isinstance(d.get("rows"), list):
@@ -137,7 +129,6 @@ def _parse_akumulasi(resp):
             _try_rows(d.get("rows"))
         if isinstance(d.get("data"), list):
             _try_rows(d.get("data"))
-        # Fallback di root
         for key in ("rows","items","list","data"):
             v = resp.get(key)
             if isinstance(v, list):
@@ -153,7 +144,6 @@ def _parse_akumulasi(resp):
                 except Exception:
                     continue
 
-    # dedup symbol (ambil terakhir)
     uniq = {}
     for r in out:
         uniq[r["symbol"]] = r["value"]
@@ -193,11 +183,16 @@ def main():
     day_csv  = DATA_DIR / f"{ds}.csv"
     raw_json = RAW_DIR / f"{ds}.raw.json"
 
-    # 1) Ambil data via Playwright: klik "Akum IHSG" di Screener
+    # 1) Tangkap hasil screener (prioritas: template_id, lalu klik name)
     meta = None
     for i in range(1 + CAPTURE_RETRIES):
         try:
-            meta = get_screener_results_by_name(name=CAPTURE_NAME, headless=True, timeout_ms=CAPTURE_TIMEOUT_MS)
+            meta = get_screener_results_by_name(
+                name=CAPTURE_NAME,
+                headless=True,
+                timeout_ms=CAPTURE_TIMEOUT_MS,
+                template_id=CAPTURE_TEMPLATE_ID,
+            )
             break
         except Exception as e:
             print(f"[BANDAR] capture error (try {i+1}/{1+CAPTURE_RETRIES}):", e)
