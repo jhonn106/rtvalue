@@ -95,14 +95,19 @@ def _pb_buy_ratio_latest(symbol, interval="10m"):
         return None
 
 def main():
-    seen = {}  # trade_number -> timestamp
+    seen = {}
     while True:
+        now = _now()
+        # kalau sudah lewat jam tutup -> KELUAR
+        if now > _market_close_today():
+            print("[RT ALERT] Market closed — exiting loop.")
+            break
+
         if not _in_trading():
-            # tunggu sampai open berikutnya
-            slp = max(5, (_market_open_today() - _now()).total_seconds())
-            time.sleep(min(slp, 300))
-            seen.clear()
-            continue
+            # sebelumnya kita tidur menunggu besok -> HAPUS/PANGKAS
+            # cukup break saja agar job selesai hari ini
+            print("[RT ALERT] Outside trading window — exiting.")
+            break
 
         try:
             rt = stockbit.running_trade(limit=200)
