@@ -129,37 +129,36 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
     lines.append(f"(info: gainers={len(gainers)}, values={len(values)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
     lines.append("")
 
-    # --- TABEL: Top Gainer
+        # --- TABEL: Top Gainer (symbol · %kenaikan · last · value)
     lines.append("— Top Gainer —")
     if not gainers:
         lines.append("  (kosong)")
     else:
-        lines.append("  Symbol  |    Δ%    |  Last  |   RT Value")
+        lines.append("  Symbol  |   % Up   |  Last  |        Value")
         lines.append("  --------+----------+--------+----------------")
         for g in gainers:
             sym = g["symbol"]
             chg = pct(g["chg_pct"] if g["chg_pct"] is not None else 0)
-            snap = agg.get(sym, {})
-            last = str(snap.get("price", "-")) if snap.get("price") else "-"
-            rtval = rupiah(snap.get("value", 0))
-            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {rtval:>14}")
+            last = id_int(g.get("last") or 0) if (g.get("last") is not None) else "-"
+            val = rupiah(g["value"] if g["value"] is not None else 0)
+            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
     lines.append("")
 
-    # --- TABEL: Top Value
+    # --- TABEL: Top Value (symbol · %kenaikan · last · value)
     lines.append("— Top Value —")
     if not values:
         lines.append("  (kosong)")
     else:
-        lines.append("  Symbol  |     Value     |  Last  |  RT Lot")
-        lines.append("  --------+---------------+--------+--------")
+        lines.append("  Symbol  |   % Up   |  Last  |        Value")
+        lines.append("  --------+----------+--------+----------------")
         for v in values:
             sym = v["symbol"]
+            chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
+            last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
             val = rupiah(v["value"] if v["value"] is not None else 0)
-            snap = agg.get(sym, {})
-            last = str(snap.get("price", "-")) if snap.get("price") else "-"
-            rtlot = id_int(snap.get("lot", 0))
-            lines.append(f"  {sym:<7} | {val:>13} | {last:>6} | {rtlot:>6}")
+            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
     lines.append("")
+
 
     # --- TABEL: RT Most Active (by value)
     lines.append("— RT Most Active (last window) —")
