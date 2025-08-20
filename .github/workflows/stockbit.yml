@@ -33,6 +33,15 @@ jobs:
       - name: Install Playwright
         run: |
           python -m playwright install --with-deps chromium
+          
+- name: Test Stockbit login (capture bearer)
+  run: |
+    python - <<'PY'
+    from auth.stockbit_login import get_bearer_token
+    t = get_bearer_token()
+    print("✅ Token OK, length =", len(t))
+    print("🔑 Prefix:", t[:15] + "...")
+    PY
 
       - name: Run snapshot once
         run: |
