@@ -97,6 +97,17 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
 
     lines.append("")
     lines.append("— Top Value —")
+        # Tambah seksi: RT Most Active (berdasar value & lot) dari agregasi 'agg'
+    lines.append("")
+    lines.append("— RT Most Active (last window) —")
+    if not agg:
+        lines.append("• (tidak ada data RT)")
+    else:
+        # sort by value desc
+        top_rt = sorted(agg.items(), key=lambda kv: kv[1]["value"], reverse=True)[:10]
+        for sym, m in top_rt:
+            lines.append(f"• {sym:<6} last≈{m.get('price','-')} | lot≈{m.get('lot',0)} | val≈{rupiah(m.get('value',0))}")
+
     if not values:
         lines.append("• (kosong)")
     for v in values:
@@ -134,6 +145,7 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
                     lines.append(f"• {sym:<6} (no intervals)")
                 time.sleep(0.25)
             except Exception as e:
+                lines.append(f"• {sym:<6} (PB raw: {str(pb)[:300]})")
                 lines.append(f"• {sym:<6} (PB error: {e})")
 
     tg_send("\n".join(lines))
