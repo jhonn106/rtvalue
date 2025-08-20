@@ -10,13 +10,14 @@ jobs:
   nightly-bandar:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
+        env:
       STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
       STOCKBIT_BEARER: ${{ secrets.STOCKBIT_BEARER }}
       STOCKBIT_TOKEN_PATH: token.json
-      TG_TOKEN: ${{ secrets.TG_TOKEN }}
-      TG_CHAT_ID3: ${{ secrets.TG_CHAT_ID3 }}   # bot telegram #3 khusus bandarmology
+      TG_TOKEN: ${{ secrets.TG_TOKEN_BANDAR }}   # token khusus bot bandar
+      TG_CHAT_ID3: ${{ secrets.TG_CHAT_ID3 }}   # chat id bot bandar
+
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
