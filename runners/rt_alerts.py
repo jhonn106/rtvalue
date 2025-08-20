@@ -1,39 +1,24 @@
-import os, time, json
+# runners/rt_alerts.py
+import os, time, json, requests
 from datetime import datetime, timedelta
 import pytz
 
 from clients import stockbit
-from notif.telegram import send as tg_send  # untuk fallback; kita pakai sender kustom ke chat2
 
+# =================== Konfigurasi ===================
 TZ = pytz.timezone("Asia/Jakarta")
-JAK_START = (9, 0)
-JAK_END   = (16, 15)
 
-THRESHOLD_IDR = 10_000_000  # Rp10jt
-POLL_SECONDS = 15           # polling interval RT
-DEDUP_MINUTES = 15          # simpan id trade untuk hindari duplikat
+JAK_START = (9, 0)     # 09:00 WIB
+JAK_END   = (16, 15)   # 16:15 WIB  (ubah ke (16, 0) jika mau stop 16:00)
 
-import requests
+THRESHOLD_IDR   = 10_000_000   # nilai minimal transaksi buy (Rp)
+POLL_SECONDS    = 15           # interval polling RT (detik)
+DEDUP_MINUTES   = 15           # simpan id trade utk anti-duplikat (menit)
 
-TG_TOKEN = os.environ.get("TG_TOKEN")
+TG_TOKEN   = os.environ.get("TG_TOKEN")
 TG_CHAT_ID2 = os.environ.get("TG_CHAT_ID2") or os.environ.get("TG_CHAT_ID_2")
 
-def send_to_chat2(text: str):
-    """Kirim ke Telegram #2; kalau token/chat kosong → print saja."""
-    if not TG_TOKEN or not TG_CHAT_ID2:
-        print("[RT ALERT]", text)
-        return
-    try:
-        r = requests.post(
-            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
-            json={"chat_id": TG_CHAT_ID2, "text": text, "parse_mode": "HTML"},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            print("[RT ALERT WARN]", r.text)
-    except Exception as e:
-        print("[RT ALERT ERR]", e)
-
+# =================== Utils ===================
 def _now():
     return datetime.now(TZ)
 
@@ -45,9 +30,9 @@ def _market_close_today():
     n = _now()
     return TZ.localize(datetime(n.year, n.month, n.day, JAK_END[0], JAK_END[1], 0))
 
-def _in_trading():
+def _in_trading_window():
     n = _now()
-    return (n.weekday() < 5) and (_market_open_today() <= n <= _market_close_today())
+    return (n.weekday() < 5) and (_market_open_today() <= n < _market_close_today())
 
 def _extract_rt_list(rt_raw):
     if isinstance(rt_raw, dict):
@@ -71,7 +56,7 @@ def _rupiah(n):
         return str(n)
 
 def _pb_buy_ratio_latest(symbol, interval="10m"):
-    """Ambil rasio buy (latest bucket 10m)."""
+    """Ambil rasio buy pada bucket terbaru PowerBuy (10m)."""
     try:
         pb = stockbit.powerbuy(symbol, interval=interval)
         d = pb.get("data") if isinstance(pb, dict) else None
@@ -94,70 +79,97 @@ def _pb_buy_ratio_latest(symbol, interval="10m"):
     except Exception:
         return None
 
+def _send_to_chat2(text: str):
+    """Kirim ke Telegram #2; jika token/chat kosong → print ke log."""
+    if not TG_TOKEN or not TG_CHAT_ID2:
+        print("[RT ALERT]", text)
+        return
+    try:
+        r = requests.post(
+            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+            json={"chat_id": TG_CHAT_ID2, "text": text, "parse_mode": "HTML"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            print("[RT ALERT WARN]", r.text)
+    except Exception as e:
+        print("[RT ALERT ERR]", e)
+
+# =================== Main loop ===================
 def main():
-    seen = {}
+    start_ts = _now()
+    seen = {}  # trade_number -> datetime (untuk anti-dup)
+
+    print("[RT ALERT] Started. Window:", _market_open_today(), "→", _market_close_today())
+
     while True:
         now = _now()
-        # kalau sudah lewat jam tutup -> KELUAR
-        if now > _market_close_today():
+
+        # === STOP otomatis saat lewat jam tutup ===
+        if now >= _market_close_today():
             print("[RT ALERT] Market closed — exiting loop.")
             break
 
-        if not _in_trading():
-            # sebelumnya kita tidur menunggu besok -> HAPUS/PANGKAS
-            # cukup break saja agar job selesai hari ini
-            print("[RT ALERT] Outside trading window — exiting.")
+        # Di luar hari kerja → stop juga
+        if now.weekday() >= 5:
+            print("[RT ALERT] Weekend — exiting loop.")
             break
+
+        # Jika sebelum jam buka, tidur pendek sampai buka
+        if now < _market_open_today():
+            time.sleep(min(60, (_market_open_today() - now).total_seconds()))
+            continue
 
         try:
             rt = stockbit.running_trade(limit=200)
             items = _extract_rt_list(rt)
-            # sort by time? server sudah desc by time
+
+            # Proses hanya 'buy' dan di atas threshold
             for t in items:
                 if not isinstance(t, dict):
                     continue
                 if t.get("action") != "buy":
                     continue
-                code = t.get("code") or t.get("symbol") or t.get("stock")
+
+                code  = t.get("code") or t.get("symbol") or t.get("stock")
                 price = _to_int(t.get("price") or t.get("trade_price") or 0)
                 lot   = _to_int(t.get("lot") or t.get("volume") or 0)
-                trade_no = t.get("trade_number") or t.get("id")
+                tid   = t.get("trade_number") or t.get("id")
 
-                if not code or price <= 0 or lot <= 0 or not trade_no:
+                if not code or price <= 0 or lot <= 0 or not tid:
                     continue
 
-                val = price * lot * 100  # ID market: 1 lot = 100 saham
+                val = price * lot * 100  # 1 lot = 100 saham
                 if val < THRESHOLD_IDR:
                     continue
 
-                # de-dup
-                nowts = _now()
-                if trade_no in seen and (nowts - seen[trade_no]) < timedelta(minutes=DEDUP_MINUTES):
+                # Anti-duplikat dalam jendela pendek
+                nowts = now
+                if tid in seen and (nowts - seen[tid]) < timedelta(minutes=DEDUP_MINUTES):
                     continue
-                seen[trade_no] = nowts
+                seen[tid] = nowts
 
-                # gain% (string "+1.23%"), fallback "-"
                 gain = t.get("change") or t.get("chg") or "-"
-                # time dari feed (format "HH:MM")
-                tm = t.get("time") or nowts.strftime("%H:%M")
+                tm   = t.get("time") or nowts.strftime("%H:%M")
 
-                # PBuy rasio dari bucket terbaru
                 br = _pb_buy_ratio_latest(code, "10m")
                 pbuy = "-" if br is None else f"{br*100:.0f}%"
 
                 msg = f"[{tm}] {code} {price} {gain} {_rupiah(val)}  PBuy:{pbuy}"
-                send_to_chat2(msg)
+                _send_to_chat2(msg)
 
-            # bersihkan cache lama
-            cutoff = _now() - timedelta(minutes=DEDUP_MINUTES)
+            # Bersihkan cache anti-dup yang kadaluarsa
+            cutoff = now - timedelta(minutes=DEDUP_MINUTES)
             for k in list(seen.keys()):
                 if seen[k] < cutoff:
                     del seen[k]
 
         except Exception as e:
-            print("[RT LOOP ERROR]", e)
+            print("[RT ALERT ERROR]", e)
 
         time.sleep(POLL_SECONDS)
+
+    print("[RT ALERT] Done.")
 
 if __name__ == "__main__":
     main()
