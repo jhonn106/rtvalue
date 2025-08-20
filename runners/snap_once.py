@@ -156,6 +156,7 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
             lines.append(f"• {sym:<6} last≈{m.get('price','-')} | lot≈{m.get('lot',0)} | val≈{rupiah(m.get('value',0))}")
 
     # --- PowerBuy
+        # --- PowerBuy (trade-book per time-slice)
     if include_powerbuy:
         lines.append(f"— PowerBuy ({pb_interval}) —")
 
@@ -168,43 +169,80 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
         if not uniq:
             lines.append("• (skip: tidak ada simbol dari gainers/values)")
 
-        def _extract_pb_intervals(pb_obj):
+        def _extract_pb_rows(pb_obj):
+            """
+            Bentuk baru:
+              {"message":"...","data":{"book":[
+                 {"time":"10:15","price":"", "buy":{"lot":"...", "frequency":"...", "percentage":"..."},
+                                       "sell":{"lot":"...", "frequency":"...", "percentage":"..."}}
+              ]}}
+            """
             if not isinstance(pb_obj, dict):
                 return []
             d = pb_obj.get("data")
-            # umum: data.intervals: [{buy_value,sell_value,...}]
+            if isinstance(d, dict) and isinstance(d.get("book"), list):
+                return d["book"]
+            # fallback lama (kalau ada)
             if isinstance(d, dict) and isinstance(d.get("intervals"), list):
                 return d["intervals"]
-            # variasi lain: data.items
             if isinstance(d, dict) and isinstance(d.get("items"), list):
                 return d["items"]
-            # variasi: data.series / data.points
-            if isinstance(d, dict):
-                for k in ("series", "points"):
-                    v = d.get(k)
-                    if isinstance(v, list):
-                        return v
             return []
+
+        def _to_num(s):
+            """Konversi string angka Stockbit (punya koma/dash) -> int aman."""
+            if s is None:
+                return 0
+            if isinstance(s, (int, float)):
+                return int(s)
+            s = str(s).strip()
+            if s in ("", "-", "—"):
+                return 0
+            # buang pemisah ribuan & persen
+            s = s.replace(",", "").replace(".", "")
+            s = s.replace("%", "")
+            try:
+                return int(float(s))
+            except Exception:
+                return 0
 
         for sym in uniq[:pb_limit]:
             try:
                 pb = stockbit.powerbuy(sym, interval=pb_interval)
-                intervals = _extract_pb_intervals(pb)
-                if intervals:
-                    last = intervals[-1]
-                    # berbagai penamaan key
-                    bv = (last.get("buy_value")  or last.get("buyValue")  or last.get("buy")  or 0) or 0
-                    sv = (last.get("sell_value") or last.get("sellValue") or last.get("sell") or 0) or 0
-                    total = (bv or 0) + (sv or 0)
-                    if total > 0:
-                        br = bv / total
-                        lines.append(f"• {sym:<6} buy_ratio≈{br:.2f} | buy≈{rupiah(bv)} sell≈{rupiah(sv)}")
+                rows = _extract_pb_rows(pb)
+
+                if rows:
+                    last = rows[-1]
+                    buy = last.get("buy") or {}
+                    sell = last.get("sell") or {}
+
+                    buy_lot  = _to_num(buy.get("lot"))
+                    sell_lot = _to_num(sell.get("lot"))
+                    buy_freq  = _to_num(buy.get("frequency"))
+                    sell_freq = _to_num(sell.get("frequency"))
+
+                    total_lot = buy_lot + sell_lot
+                    total_freq = buy_freq + sell_freq
+
+                    if total_lot > 0:
+                        br_lot = buy_lot / total_lot
+                        lines.append(
+                            f"• {sym:<6} buy_ratio(lot)≈{br_lot:.2f} | buy_lot={buy_lot:,} sell_lot={sell_lot:,}".replace(",", ".")
+                        )
+                    elif total_freq > 0:
+                        br_fq = buy_freq / total_freq
+                        lines.append(
+                            f"• {sym:<6} buy_ratio(freq)≈{br_fq:.2f} | buy_fq={buy_freq:,} sell_fq={sell_freq:,}".replace(",", ".")
+                        )
                     else:
                         lines.append(f"• {sym:<6} (PB total=0)")
+
                 else:
                     preview = str(pb)[:220].replace("\n"," ")
-                    lines.append(f"• {sym:<6} (no intervals) pb_raw≈ {preview}")
+                    lines.append(f"• {sym:<6} (no book rows) pb_raw≈ {preview}")
+
                 time.sleep(0.2)
+
             except Exception as e:
                 lines.append(f"• {sym:<6} (PB error: {e})")
 
