@@ -8,25 +8,16 @@ from notif.telegram import send as tg_send
 
 TZ = pytz.timezone("Asia/Jakarta")
 
-# ============ Helpers format ============
+# ================== Helpers format ==================
 def now_id():
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 def id_int(n):
-    """Integer → '1.234.567'."""
+    """Integer → '1.234.567' (titik ribuan, gaya ID)."""
     try:
         return f"{int(float(n)):,}".replace(",", ".")
     except Exception:
         return str(n)
-
-def id_float2(x):
-    """Float → '12,34' → pakai koma desimal & titik ribuan (sesuai kebiasaan)."""
-    try:
-        s = f"{float(x):,.2f}"
-        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
-        return s
-    except Exception:
-        return str(x)
 
 def pct(x):
     try:
@@ -53,20 +44,17 @@ def _extract_rt_list(rt_raw):
             return d["running_trade"]
         for key in ("data", "result", "items"):
             v = rt_raw.get(key)
-            if isinstance(v, list): return v
-            if isinstance(v, dict) and isinstance(v.get("items"), list): return v["items"]
+            if isinstance(v, list):
+                return v
+            if isinstance(v, dict) and isinstance(v.get("items"), list):
+                return v["items"]
         return []
     if isinstance(rt_raw, list):
         return rt_raw
     return []
 
-def _pretty(obj, n=800):
-    try:
-        return json.dumps(obj, ensure_ascii=False)[:n]
-    except Exception:
-        return str(obj)[:n]
-
 def _to_num(s):
+    """Konversi string angka (punya koma/titik/persen/dash) → int aman."""
     if s is None: return 0
     if isinstance(s, (int, float)): return int(s)
     s = str(s).strip()
@@ -77,22 +65,30 @@ def _to_num(s):
     except Exception:
         return 0
 
-# ============ Main ============
+def _pretty(obj, n=800):
+    try:
+        return json.dumps(obj, ensure_ascii=False)[:n]
+    except Exception:
+        return str(obj)[:n]
 
+# ================== Main ==================
 def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval="10m"):
-   # --- TOP GAINER / VALUE
-gainers_raw = stockbit.top_gainer()
-values_raw  = stockbit.top_value()
+    # --- TOP GAINER / VALUE (ambil bahan)
+    gainers_raw = stockbit.top_gainer()
+    values_raw  = stockbit.top_value()
 
-gainers = parse_market_mover(gainers_raw)[:top_n]   # ini boleh langsung 10
-values_all  = parse_market_mover(values_raw)        # JANGAN slice di sini
+    # Top Gainer cukup langsung 10 teratas
+    gainers = parse_market_mover(gainers_raw)[:top_n]
 
+    # Top Value: ambil lebih banyak dulu, lalu filter yang naik, baru ambil 10
+    values_all = parse_market_mover(values_raw)[:50]  # bahan lebih banyak
+    values_pos = [v for v in values_all if (v.get("chg_pct") or 0) > 0][:top_n]
 
     # --- RUNNING TRADE
     rt_raw  = stockbit.running_trade(limit=rt_limit)
     rt_list = _extract_rt_list(rt_raw)
 
-    # --- Aggregate RT per simbol
+    # --- Aggregate RT per simbol (untuk seksi RT Most Active)
     agg = {}
     skipped = 0
     for raw in rt_list:
@@ -127,10 +123,10 @@ values_all  = parse_market_mover(values_raw)        # JANGAN slice di sini
     # ====== Compose report (rapi) ======
     lines = []
     lines.append(f"📊 Stockbit Snapshot {now_id()}")
-    lines.append(f"(info: gainers={len(gainers)}, values={len(values)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
+    lines.append(f"(info: gainers={len(gainers)}, values_pos={len(values_pos)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
     lines.append("")
 
-        # --- TABEL: Top Gainer (symbol · %kenaikan · last · value)
+    # --- TABEL: Top Gainer (symbol · % up · last · value)
     lines.append("— Top Gainer —")
     if not gainers:
         lines.append("  (kosong)")
@@ -138,33 +134,27 @@ values_all  = parse_market_mover(values_raw)        # JANGAN slice di sini
         lines.append("  Symbol  |   % Up   |  Last  |        Value")
         lines.append("  --------+----------+--------+----------------")
         for g in gainers:
-            sym = g["symbol"]
-            chg = pct(g["chg_pct"] if g["chg_pct"] is not None else 0)
+            sym  = g["symbol"]
+            chg  = pct(g["chg_pct"] if g["chg_pct"] is not None else 0)
             last = id_int(g.get("last") or 0) if (g.get("last") is not None) else "-"
-            val = rupiah(g["value"] if g["value"] is not None else 0)
+            val  = rupiah(g["value"] if g["value"] is not None else 0)
             lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
     lines.append("")
 
-
-   # --- TABEL: Top Value (symbol · %kenaikan · last · value)
-lines.append("— Top Value —")
-# ambil hanya yang naik, lalu ambil 10 teratas (urut bawaan API sudah by value)
-values_pos = [v for v in values_all if (v.get("chg_pct") or 0) > 0][:top_n]
-
-if not values_pos:
-    lines.append("  (tidak ada saham naik)")
-else:
-    lines.append("  Symbol  |   % Up   |  Last  |        Value")
-    lines.append("  --------+----------+--------+----------------")
-    for v in values_pos:
-        sym = v["symbol"]
-        chg = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
-        last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
-        val = rupiah(v["value"] if v["value"] is not None else 0)
-        lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
-lines.append("")
-
-
+    # --- TABEL: Top Value (HANYA yang naik) (symbol · % up · last · value)
+    lines.append("— Top Value (Up Only) —")
+    if not values_pos:
+        lines.append("  (tidak ada saham naik di Top Value)")
+    else:
+        lines.append("  Symbol  |   % Up   |  Last  |        Value")
+        lines.append("  --------+----------+--------+----------------")
+        for v in values_pos:
+            sym  = v["symbol"]
+            chg  = pct(v["chg_pct"] if v["chg_pct"] is not None else 0)
+            last = id_int(v.get("last") or 0) if (v.get("last") is not None) else "-"
+            val  = rupiah(v["value"] if v["value"] is not None else 0)
+            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {val:>14}")
+    lines.append("")
 
     # --- TABEL: RT Most Active (by value)
     lines.append("— RT Most Active (last window) —")
@@ -175,7 +165,7 @@ lines.append("")
         lines.append("  --------+--------+---------+----------------")
         top_rt = sorted(agg.items(), key=lambda kv: kv[1]["value"], reverse=True)[:10]
         for sym, m in top_rt:
-            last = str(m.get("price", "-")) if m.get("price") else "-"
+            last = id_int(m.get("price", 0)) if m.get("price") else "-"
             lot  = id_int(m.get("lot", 0))
             val  = rupiah(m.get("value", 0))
             lines.append(f"  {sym:<7} | {last:>6} | {lot:>7} | {val:>14}")
@@ -185,19 +175,25 @@ lines.append("")
     if include_powerbuy:
         lines.append(f"— PowerBuy ({pb_interval}) —")
 
-        # daftar unik dari gainers + values
+        # daftar unik dari gainers + values_pos (supaya fokus yang relevan)
         uniq = []
-        for x in gainers + values:
+        for x in gainers + values_pos:
             s = x["symbol"]
             if s and s not in uniq:
                 uniq.append(s)
 
         def _extract_pb_rows(pb_obj):
+            """
+            Bentuk umum terbaru:
+              {"data":{"book":[
+                 {"time":"10:15","price":"", "buy":{"lot":"…","frequency":"…"}, "sell":{"lot":"…","frequency":"…"}}
+              ]}}
+            """
             if not isinstance(pb_obj, dict): return []
             d = pb_obj.get("data")
             if isinstance(d, dict) and isinstance(d.get("book"), list):
                 return d["book"]
-            # fallback lama
+            # fallback lama (tidak dipakai di data terkini, tapi biarkan)
             if isinstance(d, dict) and isinstance(d.get("intervals"), list):
                 return d["intervals"]
             if isinstance(d, dict) and isinstance(d.get("items"), list):
