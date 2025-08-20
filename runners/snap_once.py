@@ -12,7 +12,6 @@ def now_id():
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
 def _coerce_dict(x):
-    """Kembalikan dict dari x; jika string JSON coba json.loads; selain itu -> None."""
     if isinstance(x, dict):
         return x
     if isinstance(x, str):
@@ -24,32 +23,29 @@ def _coerce_dict(x):
     return None
 
 def _extract_rt_list(rt_raw):
-    """
-    Ambil list item running-trade dari berbagai kemungkinan bentuk respons.
-    """
     if isinstance(rt_raw, list):
         return rt_raw
     if isinstance(rt_raw, dict):
-        # beberapa varian field yang mungkin
         for key in ("data", "result", "items"):
             v = rt_raw.get(key)
             if isinstance(v, list):
                 return v
-            if isinstance(v, dict) and "items" in v and isinstance(v["items"], list):
+            if isinstance(v, dict) and isinstance(v.get("items"), list):
                 return v["items"]
-        # jika bentuknya dict tapi tidak ada list, anggap tidak ada data
         return []
-    # bentuk lain (string, dll) -> tidak valid
     return []
 
 def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=50, pb_interval="10m"):
-    gainers = parse_market_mover(stockbit.top_gainer())[:top_n]
-    values  = parse_market_mover(stockbit.top_value())[:top_n]
+    gainers_raw = stockbit.top_gainer()
+    values_raw  = stockbit.top_value()
 
-    rt_raw = stockbit.running_trade(limit=rt_limit)
+    gainers = parse_market_mover(gainers_raw)[:top_n]
+    values  = parse_market_mover(values_raw)[:top_n]
+
+    rt_raw  = stockbit.running_trade(limit=rt_limit)
     rt_list = _extract_rt_list(rt_raw)
 
-    # ringkas RT value/lot per simbol (robust untuk item string/dict)
+    # ringkas RT
     agg = {}
     skipped = 0
     for raw in rt_list:
@@ -57,12 +53,10 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=50, pb_interval="
         if not t:
             skipped += 1
             continue
-
         s = t.get("symbol") or t.get("stock") or t.get("code")
         if not s:
             skipped += 1
             continue
-
         try:
             price = int(t.get("price") or t.get("trade_price") or t.get("last") or 0)
         except Exception:
@@ -79,22 +73,26 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=50, pb_interval="
         cur = agg.get(s, {"value":0,"lot":0,"price":price})
         cur["value"] += max(0, val)
         cur["lot"]   += max(0, lot)
-        if price:      # update last price jika ada
+        if price:
             cur["price"] = price
         agg[s] = cur
 
     lines = []
     lines.append(f"📊 Stockbit Snapshot {now_id()}")
-    if skipped:
-        lines.append(f"(info: {skipped} item RT di-skip karena format tidak dikenal)")
+    # ringkas jumlah untuk bantu debug
+    lines.append(f"(info: gainers={len(gainers)}, values={len(values)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
 
     lines.append("— Top Gainer —")
+    if not gainers:
+        lines.append("• (kosong) — struktur API mungkin berubah; parser akan menyesuaikan.")
     for g in gainers:
         sym = g["symbol"]; chg = g["chg_pct"]; snap = agg.get(sym, {})
         lines.append(f"• {sym:<6} {str(chg)+'%':>6} | last≈{snap.get('price','-')} | RT val≈{rupiah(snap.get('value',0))}")
 
     lines.append("")
     lines.append("— Top Value —")
+    if not values:
+        lines.append("• (kosong)")
     for v in values:
         sym = v["symbol"]; val = v["value"]; snap = agg.get(sym, {})
         lines.append(f"• {sym:<6} {rupiah(val):>12} | last≈{snap.get('price','-')} | RT lot≈{snap.get('lot',0)}")
@@ -102,13 +100,13 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=50, pb_interval="
     if include_powerbuy:
         lines.append("")
         lines.append(f"— PowerBuy ({pb_interval}) —")
-        # daftar simbol unik dari gainers + values
         uniq = []
         for x in gainers + values:
             s = x["symbol"]
             if s and s not in uniq:
                 uniq.append(s)
-
+        if not uniq:
+            lines.append("• (skip: tidak ada simbol dari gainers/values)")
         for sym in uniq[:pb_limit]:
             try:
                 pb = stockbit.powerbuy(sym, interval=pb_interval)
