@@ -8,11 +8,33 @@ from notif.telegram import send as tg_send
 
 TZ = pytz.timezone("Asia/Jakarta")
 
+# ============ Helpers format ============
 def now_id():
     return datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
 
+def id_int(n):
+    """Integer → '1.234.567'."""
+    try:
+        return f"{int(float(n)):,}".replace(",", ".")
+    except Exception:
+        return str(n)
+
+def id_float2(x):
+    """Float → '12,34' → pakai koma desimal & titik ribuan (sesuai kebiasaan)."""
+    try:
+        s = f"{float(x):,.2f}"
+        s = s.replace(",", "X").replace(".", ",").replace("X", ".")
+        return s
+    except Exception:
+        return str(x)
+
+def pct(x):
+    try:
+        return f"{float(x):.2f}%"
+    except Exception:
+        return str(x)
+
 def _coerce_dict(x):
-    """Return dict from x; if x is JSON string try json.loads; else None."""
     if isinstance(x, dict):
         return x
     if isinstance(x, str):
@@ -24,21 +46,15 @@ def _coerce_dict(x):
     return None
 
 def _extract_rt_list(rt_raw):
-    """
-    Support struktur baru: {"data":{"running_trade":[...]}}
-    + fallback lama (data/items/result).
-    """
+    """Support struktur baru: {'data': {'running_trade': [...]}} + fallback lama."""
     if isinstance(rt_raw, dict):
         d = rt_raw.get("data")
         if isinstance(d, dict) and isinstance(d.get("running_trade"), list):
             return d["running_trade"]
-        # fallback lama
         for key in ("data", "result", "items"):
             v = rt_raw.get(key)
-            if isinstance(v, list):
-                return v
-            if isinstance(v, dict) and isinstance(v.get("items"), list):
-                return v["items"]
+            if isinstance(v, list): return v
+            if isinstance(v, dict) and isinstance(v.get("items"), list): return v["items"]
         return []
     if isinstance(rt_raw, list):
         return rt_raw
@@ -50,41 +66,32 @@ def _pretty(obj, n=800):
     except Exception:
         return str(obj)[:n]
 
+def _to_num(s):
+    if s is None: return 0
+    if isinstance(s, (int, float)): return int(s)
+    s = str(s).strip()
+    if s in ("", "-", "—"): return 0
+    s = s.replace(",", "").replace(".", "").replace("%", "")
+    try:
+        return int(float(s))
+    except Exception:
+        return 0
+
+# ============ Main ============
+
 def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval="10m"):
-    # --- TOP GAINER / VALUE (utama)
+    # --- TOP GAINER / VALUE
     gainers_raw = stockbit.top_gainer()
     values_raw  = stockbit.top_value()
 
     gainers = parse_market_mover(gainers_raw)[:top_n]
     values  = parse_market_mover(values_raw)[:top_n]
 
-    # Fallback: coba endpoint tanpa filter jika kosong
-    used_fallback_mm = False
-    if not gainers or not values:
-        try:
-            g2 = stockbit.top_gainer_simple()
-            v2 = stockbit.top_value_simple()
-            pg2 = parse_market_mover(g2)[:top_n]
-            pv2 = parse_market_mover(v2)[:top_n]
-            if not gainers: gainers = pg2
-            if not values:  values  = pv2
-            used_fallback_mm = True
-        except Exception:
-            pass
-
-    # --- RUNNING TRADE (utama)
+    # --- RUNNING TRADE
     rt_raw  = stockbit.running_trade(limit=rt_limit)
     rt_list = _extract_rt_list(rt_raw)
-    used_fallback_rt = False
-    if not rt_list:
-        try:
-            rt2 = stockbit.running_trade_simple()
-            rt_list = _extract_rt_list(rt2)
-            used_fallback_rt = True
-        except Exception:
-            pass
 
-    # --- Ringkas RT
+    # --- Aggregate RT per simbol
     agg = {}
     skipped = 0
     for raw in rt_list:
@@ -96,7 +103,6 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
         if not s:
             skipped += 1
             continue
-        # price/lot sering berupa string
         try:
             price = int(float(t.get("price") or t.get("trade_price") or t.get("last") or 0))
         except Exception:
@@ -117,136 +123,124 @@ def run(top_n=10, include_powerbuy=True, pb_limit=10, rt_limit=500, pb_interval=
             cur["price"] = price
         agg[s] = cur
 
-    # --- Compose laporan
+    # ====== Compose report (rapi) ======
     lines = []
     lines.append(f"📊 Stockbit Snapshot {now_id()}")
-    lines.append(f"(info: gainers={len(gainers)}, values={len(values)}, rt_items={len(rt_list)}, rt_skipped={skipped}, mm_fallback={used_fallback_mm}, rt_fallback={used_fallback_rt})")
+    lines.append(f"(info: gainers={len(gainers)}, values={len(values)}, rt_items={len(rt_list)}, rt_skipped={skipped})")
+    lines.append("")
 
-    # Jika masih kosong, tampilkan RAW untuk diagnosa cepat
-    if not gainers:
-        lines.append("RAW gainers (cuplikan): " + _pretty(gainers_raw))
-    if not values:
-        lines.append("RAW values (cuplikan): " + _pretty(values_raw))
-    if not rt_list:
-        lines.append("RAW running-trade (cuplikan): " + _pretty(rt_raw))
-
-    # --- Top Gainer
+    # --- TABEL: Top Gainer
     lines.append("— Top Gainer —")
     if not gainers:
-        lines.append("• (kosong)")
-    for g in gainers:
-        sym = g["symbol"]; chg = g["chg_pct"]; snap = agg.get(sym, {})
-        lines.append(f"• {sym:<6} {str(chg)+'%':>6} | last≈{snap.get('price','-')} | RT val≈{rupiah(snap.get('value',0))}")
+        lines.append("  (kosong)")
+    else:
+        lines.append("  Symbol  |    Δ%    |  Last  |   RT Value")
+        lines.append("  --------+----------+--------+----------------")
+        for g in gainers:
+            sym = g["symbol"]
+            chg = pct(g["chg_pct"] if g["chg_pct"] is not None else 0)
+            snap = agg.get(sym, {})
+            last = str(snap.get("price", "-")) if snap.get("price") else "-"
+            rtval = rupiah(snap.get("value", 0))
+            lines.append(f"  {sym:<7} | {chg:>8} | {last:>6} | {rtval:>14}")
+    lines.append("")
 
-    # --- Top Value
+    # --- TABEL: Top Value
     lines.append("— Top Value —")
     if not values:
-        lines.append("• (kosong)")
-    for v in values:
-        sym = v["symbol"]; val = v["value"]; snap = agg.get(sym, {})
-        lines.append(f"• {sym:<6} {rupiah(val):>12} | last≈{snap.get('price','-')} | RT lot≈{snap.get('lot',0)}")
+        lines.append("  (kosong)")
+    else:
+        lines.append("  Symbol  |     Value     |  Last  |  RT Lot")
+        lines.append("  --------+---------------+--------+--------")
+        for v in values:
+            sym = v["symbol"]
+            val = rupiah(v["value"] if v["value"] is not None else 0)
+            snap = agg.get(sym, {})
+            last = str(snap.get("price", "-")) if snap.get("price") else "-"
+            rtlot = id_int(snap.get("lot", 0))
+            lines.append(f"  {sym:<7} | {val:>13} | {last:>6} | {rtlot:>6}")
+    lines.append("")
 
-    # --- RT Most Active (berdasar value dari window RT)
+    # --- TABEL: RT Most Active (by value)
     lines.append("— RT Most Active (last window) —")
     if not agg:
-        lines.append("• (tidak ada data RT)")
+        lines.append("  (tidak ada data RT)")
     else:
+        lines.append("  Symbol  |  Last  |   Lot   |     Value")
+        lines.append("  --------+--------+---------+----------------")
         top_rt = sorted(agg.items(), key=lambda kv: kv[1]["value"], reverse=True)[:10]
         for sym, m in top_rt:
-            lines.append(f"• {sym:<6} last≈{m.get('price','-')} | lot≈{m.get('lot',0)} | val≈{rupiah(m.get('value',0))}")
+            last = str(m.get("price", "-")) if m.get("price") else "-"
+            lot  = id_int(m.get("lot", 0))
+            val  = rupiah(m.get("value", 0))
+            lines.append(f"  {sym:<7} | {last:>6} | {lot:>7} | {val:>14}")
+    lines.append("")
 
-    # --- PowerBuy
-        # --- PowerBuy (trade-book per time-slice)
+    # --- TABEL: PowerBuy (trade-book)
     if include_powerbuy:
         lines.append(f"— PowerBuy ({pb_interval}) —")
 
+        # daftar unik dari gainers + values
         uniq = []
         for x in gainers + values:
             s = x["symbol"]
             if s and s not in uniq:
                 uniq.append(s)
 
-        if not uniq:
-            lines.append("• (skip: tidak ada simbol dari gainers/values)")
-
         def _extract_pb_rows(pb_obj):
-            """
-            Bentuk baru:
-              {"message":"...","data":{"book":[
-                 {"time":"10:15","price":"", "buy":{"lot":"...", "frequency":"...", "percentage":"..."},
-                                       "sell":{"lot":"...", "frequency":"...", "percentage":"..."}}
-              ]}}
-            """
-            if not isinstance(pb_obj, dict):
-                return []
+            if not isinstance(pb_obj, dict): return []
             d = pb_obj.get("data")
             if isinstance(d, dict) and isinstance(d.get("book"), list):
                 return d["book"]
-            # fallback lama (kalau ada)
+            # fallback lama
             if isinstance(d, dict) and isinstance(d.get("intervals"), list):
                 return d["intervals"]
             if isinstance(d, dict) and isinstance(d.get("items"), list):
                 return d["items"]
             return []
 
-        def _to_num(s):
-            """Konversi string angka Stockbit (punya koma/dash) -> int aman."""
-            if s is None:
-                return 0
-            if isinstance(s, (int, float)):
-                return int(s)
-            s = str(s).strip()
-            if s in ("", "-", "—"):
-                return 0
-            # buang pemisah ribuan & persen
-            s = s.replace(",", "").replace(".", "")
-            s = s.replace("%", "")
-            try:
-                return int(float(s))
-            except Exception:
-                return 0
-
+        # Kumpulkan ringkasan PB (ambil baris terakhir untuk setiap simbol)
+        pb_rows = []
         for sym in uniq[:pb_limit]:
             try:
                 pb = stockbit.powerbuy(sym, interval=pb_interval)
                 rows = _extract_pb_rows(pb)
-
                 if rows:
                     last = rows[-1]
                     buy = last.get("buy") or {}
                     sell = last.get("sell") or {}
-
                     buy_lot  = _to_num(buy.get("lot"))
                     sell_lot = _to_num(sell.get("lot"))
-                    buy_freq  = _to_num(buy.get("frequency"))
-                    sell_freq = _to_num(sell.get("frequency"))
-
                     total_lot = buy_lot + sell_lot
-                    total_freq = buy_freq + sell_freq
+                    br = (buy_lot / total_lot) if total_lot > 0 else None
+                    pb_rows.append({
+                        "symbol": sym,
+                        "buy_lot": buy_lot,
+                        "sell_lot": sell_lot,
+                        "total_lot": total_lot,
+                        "buy_ratio": br,
+                    })
+                time.sleep(0.15)
+            except Exception:
+                # skip simbol bermasalah
+                pass
 
-                    if total_lot > 0:
-                        br_lot = buy_lot / total_lot
-                        lines.append(
-                            f"• {sym:<6} buy_ratio(lot)≈{br_lot:.2f} | buy_lot={buy_lot:,} sell_lot={sell_lot:,}".replace(",", ".")
-                        )
-                    elif total_freq > 0:
-                        br_fq = buy_freq / total_freq
-                        lines.append(
-                            f"• {sym:<6} buy_ratio(freq)≈{br_fq:.2f} | buy_fq={buy_freq:,} sell_fq={sell_freq:,}".replace(",", ".")
-                        )
-                    else:
-                        lines.append(f"• {sym:<6} (PB total=0)")
+        if not pb_rows:
+            lines.append("  (tidak ada data)")
+        else:
+            # urutkan by total lot desc
+            pb_rows.sort(key=lambda r: r["total_lot"], reverse=True)
+            lines.append("  Symbol  |  Buy%  |   Buy Lot   |  Sell Lot   |  Total Lot")
+            lines.append("  --------+--------+-------------+-------------+------------")
+            for r in pb_rows:
+                sym = r["symbol"]
+                br  = f"{r['buy_ratio']*100:5.1f}%" if r["buy_ratio"] is not None else "  n/a"
+                bl  = id_int(r["buy_lot"])
+                sl  = id_int(r["sell_lot"])
+                tl  = id_int(r["total_lot"])
+                lines.append(f"  {sym:<7} | {br:>6} | {bl:>11} | {sl:>11} | {tl:>10}")
 
-                else:
-                    preview = str(pb)[:220].replace("\n"," ")
-                    lines.append(f"• {sym:<6} (no book rows) pb_raw≈ {preview}")
-
-                time.sleep(0.2)
-
-            except Exception as e:
-                lines.append(f"• {sym:<6} (PB error: {e})")
-
-    # Kirim/print
+    # Kirim / print
     tg_send("\n".join(lines))
 
 if __name__ == "__main__":
