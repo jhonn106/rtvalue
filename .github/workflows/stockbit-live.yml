@@ -5,13 +5,11 @@ on:
   schedule:
     # 08:55 WIB = 01:55 UTC (Senin–Jumat)
     - cron: "55 1 * * 1-5"
-    # 13:30 WIB = 06:30 UTC (Senin–Jumat)
-    - cron: "30 6 * * 1-5"
 
 jobs:
   snapshots:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 500
     env:
       STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
@@ -25,12 +23,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Install Playwright
         run: python -m playwright install --with-deps chromium
+
       - name: Make packages importable
         run: |
           python - <<'PY'
@@ -39,12 +40,17 @@ jobs:
               pathlib.Path(p, "__init__.py").touch()
           print("created __init__.py files")
           PY
-      - name: Run market loop (session aware)
+
+      # ⬇️ PRE-REFRESH TOKEN 08:55 WIB
+      - name: Refresh Stockbit token (preflight)
+        run: python -m runners.refresh_token
+
+      - name: Run market loop (08:55 → 16:15 WIB)
         run: python -m runners.market_loop
 
   rt-alerts:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 500
     env:
       STOCKBIT_EMAIL: ${{ secrets.STOCKBIT_EMAIL }}
       STOCKBIT_PASSWORD: ${{ secrets.STOCKBIT_PASSWORD }}
@@ -57,12 +63,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
+
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+
       - name: Install Playwright
         run: python -m playwright install --with-deps chromium
+
       - name: Make packages importable
         run: |
           python - <<'PY'
@@ -71,5 +80,10 @@ jobs:
               pathlib.Path(p, "__init__.py").touch()
           print("created __init__.py files")
           PY
-      - name: Run RT alerts (session aware)
+
+      # ⬇️ PRE-REFRESH TOKEN 08:55 WIB
+      - name: Refresh Stockbit token (preflight)
+        run: python -m runners.refresh_token
+
+      - name: Run RT alerts loop
         run: python -m runners.rt_alerts
